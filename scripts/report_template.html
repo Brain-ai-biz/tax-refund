@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>צייד החזרי המס</title>
+<style>
+/*FONTS*/
+:root{--navy:#0E1A3A;--ink:#0B1424;--paper:#F4F6FB;--gold:#FFB21E;--gold2:#FF8A00;--teal:#12B5A5;--blue:#5B7CF0;--mute:#5A6478;--line:#DCE2EE}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font-family:Brand,Rubik,"Segoe UI",Arial,sans-serif}
+body.studio{overflow:hidden;height:100vh}
+.stage{position:relative;width:100%;background:var(--paper)}
+body.studio .stage{position:fixed;inset:0}
+body.report .stage{aspect-ratio:16/9;max-height:92vh;margin:0 auto}
+@media (max-width:760px){body.report .stage{aspect-ratio:4/5;max-height:none}}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ctl{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;font:700 20px/1 Brand,Rubik,sans-serif;color:var(--navy);background:#fff;border:2px solid var(--navy);border-radius:999px;padding:13px 30px 11px;cursor:pointer}
+.ctl:hover,.ctl:focus-visible{background:var(--navy);color:#fff;outline:3px solid var(--gold);outline-offset:2px}
+.ctl[hidden]{display:none}
+#start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:0;transition:opacity .18s ease}
+#start[hidden]{display:none}
+#start.off{opacity:0;pointer-events:none}
+#start .kick{font:800 clamp(18px,1.6vw,30px)/1 Brand,Rubik,sans-serif;letter-spacing:.02em;color:#0E8F83;background:#E3F6F3;border-radius:999px;padding:12px 26px 9px;margin-bottom:28px}
+#start h1{font:900 clamp(44px,5.6vw,108px)/1.04 Brand,Rubik,sans-serif;color:var(--navy);margin:0}
+#start p{font:700 clamp(20px,1.9vw,36px)/1.35 Brand,Rubik,sans-serif;color:var(--mute);margin:22px 0 46px}
+#start p b{color:#8A5300}
+#go{font:900 clamp(26px,2.3vw,44px)/1 Brand,Rubik,sans-serif;color:#06121f;border:0;border-radius:999px;padding:.62em 2.1em .5em;cursor:pointer;background:linear-gradient(100deg,#77CEBF,#7C9CF0);box-shadow:0 14px 44px rgba(91,124,240,.32),0 0 0 8px rgba(119,206,191,.16);transition:transform .15s ease,box-shadow .15s ease}
+#go:hover{transform:translateY(-2px);box-shadow:0 18px 52px rgba(91,124,240,.42),0 0 0 10px rgba(119,206,191,.22)}
+#go:focus-visible{outline:4px solid var(--navy);outline-offset:5px}
+body.report #again{left:14px;top:14px;bottom:auto;transform:none;font-size:16px;padding:9px 18px 8px;background:rgba(255,255,255,.92)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;justify-content:center;max-width:980px;margin:12px auto 0;padding:0 16px;font-size:16px;color:var(--mute)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.legend i{display:inline-block;width:16px;height:16px;border-radius:4px}
+body.studio .legend{display:none}
+main{max-width:980px;margin:0 auto;padding:28px 20px 70px}
+body.studio main{display:none}
+h1{font-size:clamp(28px,4.4vw,44px);margin:6px 0 6px;font-weight:900;line-height:1.15}
+h2{font-size:26px;margin:44px 0 14px;font-weight:800}
+h3{margin:0;font-size:22px;font-weight:800}
+p{line-height:1.65;font-size:18px;margin:8px 0}
+a{color:#2446C7}
+.lead{font-size:20px;color:var(--mute)}
+.big{font-size:clamp(34px,6vw,58px);font-weight:900;color:var(--navy);direction:ltr;unicode-bidi:isolate;display:inline-block}
+.sum{background:#fff;border:2px solid var(--line);border-radius:22px;padding:22px 24px;margin-top:18px}
+.years{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px}
+.yr{background:#fff;border:2px solid var(--line);border-radius:20px;padding:18px 20px}
+.yr.promising{border-color:var(--gold);box-shadow:0 6px 26px rgba(255,178,30,.18)}
+.yr .hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.badge{font-size:15px;font-weight:700;border-radius:999px;padding:5px 12px;background:#EEF1F7;color:var(--mute)}
+.promising .badge{background:#FFF1D6;color:#8A5300}
+.owe .badge{background:#FDE7EA;color:#A3132E}
+.yr .amt{font-size:30px;font-weight:900;margin:10px 0 4px;direction:ltr;text-align:right;unicode-bidi:isolate}
+.nums{display:grid;grid-template-columns:1fr auto;gap:3px 10px;font-size:16px;color:var(--mute);margin:8px 0}
+.nums b{color:var(--ink);direction:ltr;unicode-bidi:isolate}
+ul{padding-inline-start:20px;margin:8px 0}
+li{line-height:1.55;font-size:16.5px;margin:4px 0}
+.why li b{direction:ltr;unicode-bidi:isolate}
+.closing{background:#FFF1D6;color:#7A4800;border-radius:12px;padding:8px 12px;font-size:15.5px;font-weight:700;margin-top:10px}
+.steps{counter-reset:s;list-style:none;padding:0}
+.steps li{counter-increment:s;background:#fff;border:2px solid var(--line);border-radius:16px;padding:14px 16px 14px 16px;margin:10px 0;font-size:18px;display:flex;gap:12px;align-items:flex-start}
+.steps li::before{content:counter(s);flex:0 0 34px;height:34px;border-radius:50%;background:var(--navy);color:#fff;font-weight:800;display:grid;place-items:center}
+.btn{display:inline-block;background:var(--navy);color:#fff;text-decoration:none;font-weight:800;border-radius:999px;padding:13px 24px;margin:6px 0 6px 10px;font-size:18px;border:0;cursor:pointer;font-family:inherit}
+.btn.alt{background:#fff;color:var(--navy);border:2px solid var(--navy)}
+.btn:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.note{font-size:15.5px;color:var(--mute)}
+.disc{background:#fff;border-inline-start:6px solid var(--teal);border-radius:12px;padding:14px 18px;margin-top:26px}
+@media print{.stage,.noprint{display:none}body{background:#fff}.yr{break-inside:avoid}}
+@media (prefers-reduced-motion:reduce){.stage{display:none}}
+@media (max-width:760px){body.report #again{top:auto;bottom:10px}}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <canvas id="cv" role="img" aria-label="טפסי 106 נפרשים לפי שנים, השנים שבהן נוכה מס ביתר נדלקות, ומונה שקלים רץ אל ההחזר המשוער"></canvas>
+  <div id="start" hidden>
+    <div class="kick">צייד החזרי המס</div>
+    <h1>מס הכנסה חייב לך כסף?</h1>
+    <p>טופס 106 לכל שנה · <b>כמה שאלות</b> · תשובה אחת ברורה</p>
+    <button id="go" type="button">התחל</button>
+  </div>
+  <button class="ctl" id="again" hidden>שוב</button>
+</div>
+<div class="legend" aria-hidden="true"><span><i style="background:#0E1A3A"></i>עמודה: המס שנוכה ממך</span><span><i style="background:#12B5A5;height:6px"></i>קו: המס שהיה צריך לשלם</span><span><i style="background:#FFB21E"></i>זהב: מה שמגיע לך בחזרה</span></div>
+<main id="main"></main>
+<script>
+'use strict';
+const DATA = /*DATA*/null;
+const MODE = /*MODE*/'report';
+document.body.className = MODE;
+const $ = id => document.getElementById(id);
+const QS = new URLSearchParams(location.search), PREVIEW = QS.get('preview') === '1';
+const NAVY = '#0E1A3A', INK = '#0B1424', PAPER = '#F4F6FB', GOLD = '#FFB21E', GOLD2 = '#FF8A00', TEAL = '#12B5A5', BLUE = '#5B7CF0', MUTE = '#8A93A6';
+const FONT = 'Brand, Rubik, "Segoe UI", Arial, sans-serif';
+const fmt = n => Math.round(n).toLocaleString('en-US');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+// ---------------------------------------------------------------- easing (every value is a pure function of t)
+const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const prog = (a, b, x) => clamp((x - a) / (b - a));
+const eio = u => u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+const eout = u => 1 - Math.pow(1 - u, 3);
+const back = (u, c = 1.6) => 1 + (c + 1) * Math.pow(u - 1, 3) + c * Math.pow(u - 1, 2);
+const lerp = (a, b, u) => a + (b - a) * u;
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+
+// beats (seconds after "התחל"): forms arrive from the personal area → IDs wiped → recompute per year →
+// overpaid years ignite → coins pour into the counter (the peak) → range → what you take with you
+const T = {portal0: 0, arrive0: .35, arriveGap: .2, arriveDur: .8, portalOut0: 2.6, portalOut1: 3.1,
+           redact0: 2.75, redact1: 4.15, lock: 4.15, fly0: 4.7, fly1: 6.1, grow0: 5.55, grow1: 6.9,
+           line0: 6.8, line1: 8.1, lit0: 8.1, lit1: 9.9, pour0: 10.0, pour1: 12.6, burst: 12.6, range0: 12.95, range1: 13.55,
+           end0: 13.6, end1: 15.2, end: 16.4};
+
+// ---------------------------------------------------------------- data → scene
+const YRS = (DATA && DATA.years || []).slice().sort((a, b) => a.year - b.year);
+const PROM = YRS.filter(y => y.status === 'promising' && y.in_window);
+const TOTAL_HI = DATA ? DATA.total_high : 0, TOTAL_LO = DATA ? DATA.total_low : 0;
+const maxW = Math.max(1, ...YRS.map(y => Math.max(y.withheld, y.should_pay)));
+let W = 1920, H = 1080, L = {}, coins = [], forms = [], sparks = [];
+
+function layout() {
+  const portrait = W < H;
+  const n = Math.max(1, YRS.length);
+  const span = portrait ? W * .92 : Math.min(W * .84, 290 * n);
+  const slot = span / n;
+  L = {portrait, slot, colW: Math.min(slot * .62, portrait ? 110 : 180),
+       base: portrait ? H * .66 : H * .79, top: portrait ? H * .28 : H * .25,
+       counterY: portrait ? H * .13 : H * .14, xs: [],
+       portalY: portrait ? H * .1 : H * .12, portalW: portrait ? Math.min(W * .86, 640) : 700, portalH: portrait ? 92 : 104};
+  // ימין לשמאל: השנה הראשונה בצד ימין
+  for (let i = 0; i < n; i++) L.xs.push(W / 2 + span / 2 - slot * (i + .5));
+  L.colH = L.base - L.top;
+  L.yearY = L.base + (portrait ? 54 : 62);
+  // the forms: one card per payer, in the order they come out of the personal area (oldest year first)
+  forms = [];
+  const r = rng(7);
+  YRS.forEach((y, yi) => y.payers.forEach((p, k) => forms.push({yi, k, n: y.payers.length, p, year: y.year,
+    rot0: (r() - .5) * .5, bend: (r() - .5) * 2, delay: forms.length * .055})));
+  forms.forEach((f, i) => {
+    f.order = i;
+    const m = forms.length, u = m > 1 ? i / (m - 1) : .5;
+    // מניפה: הטפסים נפרשים לרוחב המסך, מימין לשמאל לפי השנים
+    f.fx = W / 2 + (portrait ? W * .34 : W * .37) * (1 - 2 * u);
+    f.fy = H * (portrait ? .44 : .5) + Math.pow(2 * u - 1, 2) * H * .07;
+    f.frot = (2 * u - 1) * -.16;
+    f.a0 = T.arrive0 + i * Math.min(T.arriveGap, 1.9 / Math.max(1, m));
+  });
+  // the coins: each promising slice breaks into coins that fly to the counter
+  coins = [];
+  const rc = rng(42);
+  const per = PROM.map(y => Math.max(12, Math.round(34 * Math.sqrt(y.refund / Math.max(1, ...PROM.map(q => q.refund))) + 8)));
+  let idx = 0;
+  PROM.forEach((y, pi) => {
+    const yi = YRS.indexOf(y);
+    for (let c = 0; c < per[pi]; c++) {
+      const order = idx++;
+      const t0 = lerp(T.pour0, T.pour1 - .75, (pi + c / per[pi]) / PROM.length) + rc() * .08;
+      coins.push({yi, value: y.high / per[pi], frac: (c + 1) / per[pi], t0, dur: .62 + rc() * .22,
+                  jx: (rc() - .5) * L.colW * .7, bend: (rc() - .5) * (L.portrait ? 260 : 420), spin: rc() * 6.28, order});
+    }
+  });
+  // sparks rising from every lit slice until it pours
+  sparks = [];
+  const rs = rng(11);
+  PROM.forEach(y => { for (let i = 0; i < 14; i++) sparks.push({yi: YRS.indexOf(y), x: rs() - .5, t0: rs() * 1.6, sp: 60 + rs() * 90, sz: 4 + rs() * 7, ph: rs() * 6.28}); });
+}
+
+function colGeom(y) {
+  const h = L.colH * y.withheld / maxW, hs = L.colH * Math.min(y.should_pay, y.withheld) / maxW;
+  return {h, hs, slice: Math.max(0, h - hs)};
+}
+
+// ---------------------------------------------------------------- drawing helpers
+let cv, ctx, DPR = 1, SC = 1;
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function text(s, x, y, size, weight, color, align = 'center', dir = 'rtl', alpha = 1) {
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.direction = dir; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.font = `${weight} ${size}px ${FONT}`; ctx.fillStyle = color; ctx.fillText(s, x, y); ctx.restore();
+}
+// camera: one continuous move. A slow settle from close-up while the forms arrive, a push toward the counter while
+// the coins pour, and a release for the ending. Pure function of t, like everything else.
+function camera(t) {
+  const settle = eio(prog(0, 5.2, t)), push = eio(prog(T.pour0 - .2, T.burst, t)), rel = eio(prog(T.range0, T.end0 + .6, t));
+  const z = lerp(1.07, 1, settle) + .055 * push * (1 - rel);
+  const fy = lerp(H * .42, L.counterY + (L.base - L.counterY) * .25, push);
+  return {z, fx: W / 2, fy};
+}
+function setCam(c, k = 1) {
+  const z = 1 + (c.z - 1) * k, s = DPR * SC;
+  ctx.setTransform(s * z, 0, 0, s * z, s * c.fx * (1 - z), s * c.fy * (1 - z));
+}
+
+function drawBg(t, c) {
+  ctx.setTransform(DPR * SC, 0, 0, DPR * SC, 0, 0);
+  ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
+  // soft light from above, warmer once money appears
+  const warm = prog(T.lit0, T.burst, t) * (1 - .5 * prog(T.end0, T.end, t));
+  const lg = ctx.createRadialGradient(W / 2, H * .18, 0, W / 2, H * .18, Math.max(W, H) * .75);
+  lg.addColorStop(0, `rgba(255,255,255,${.95})`); lg.addColorStop(.45, `rgba(255,${236 - 20 * warm},${200 - 60 * warm},${.10 + .16 * warm})`); lg.addColorStop(1, 'rgba(244,246,251,0)');
+  ctx.fillStyle = lg; ctx.fillRect(0, 0, W, H);
+  setCam(c, .45);                       // the dot grid moves less than the scene: depth
+  ctx.fillStyle = 'rgba(14,26,58,.075)';
+  const g = L.portrait ? 54 : 60;
+  for (let x = g / 2 - g * 2; x < W + g * 2; x += g) for (let y = g / 2 - g * 2; y < H + g * 2; y += g) ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+}
+function drawVignette(t) {
+  ctx.setTransform(DPR * SC, 0, 0, DPR * SC, 0, 0);
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .42, W / 2, H / 2, Math.max(W, H) * .78);
+  vg.addColorStop(0, 'rgba(14,26,58,0)'); vg.addColorStop(1, 'rgba(14,26,58,.13)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  // the peak: one warm flash across the whole screen when the counter lands
+  const b = prog(T.burst, T.burst + .55, t);
+  if (b > 0 && b < 1) { ctx.fillStyle = `rgba(255,214,120,${.34 * Math.pow(1 - b, 2)})`; ctx.fillRect(0, 0, W, H); }
+}
+
+function lockIcon(x, y, s, a) {
+  ctx.save(); ctx.globalAlpha *= a; ctx.translate(x, y); ctx.scale(s, s);
+  ctx.fillStyle = TEAL; rr(-9, -2, 18, 14, 3); ctx.fill();
+  ctx.strokeStyle = TEAL; ctx.lineWidth = 3.2; ctx.beginPath(); ctx.arc(0, -3, 6, Math.PI, 0); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 4.5, 2.2, 0, 6.283); ctx.fill();
+  ctx.restore();
+}
+
+function formCard(f, x, y, w, h, rot, redactU, lockU, tilt = 0) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(1, 1 - Math.abs(tilt) * .35);
+  ctx.shadowColor = 'rgba(14,26,58,.22)'; ctx.shadowBlur = 22 + 20 * Math.abs(tilt); ctx.shadowOffsetY = 10 + 14 * Math.abs(tilt);
+  ctx.fillStyle = '#fff'; rr(-w / 2, -h / 2, w, h, w * .04); ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = '#C9D1E0'; ctx.lineWidth = Math.max(1, w * .006); ctx.stroke();
+  const s = w / 300;
+  const btl = f.p.source === 'btl';
+  ctx.fillStyle = btl ? TEAL : NAVY; rr(-w / 2, -h / 2, w, 54 * s, [w * .04, w * .04, 0, 0]); ctx.fill();
+  // the fan overlaps the right side of every card, so what matters sits on the left: the year and "106"
+  text(String(f.year), -w / 2 + 16 * s, -h / 2 + 28 * s, 26 * s, 900, btl ? '#fff' : '#FFD27A', 'left', 'ltr');
+  ctx.save(); ctx.font = `900 ${26 * s}px ${FONT}`; const yw = ctx.measureText(String(f.year)).width; ctx.restore();
+  text(btl ? 'ביטוח לאומי' : 'טופס 106', -w / 2 + 28 * s + yw, -h / 2 + 29 * s, (btl ? 14 : 21) * s, 800, 'rgba(255,255,255,.92)', 'left', 'rtl');
+  // שורת מספר זהות: תמיד ספרות מופשטות, ואז פס שחור מוחק אותן
+  const iy = -h / 2 + 84 * s;
+  text('מספר זהות', w / 2 - 16 * s, iy, 13 * s, 700, MUTE, 'right');
+  const bx = -w / 2 + 18 * s, bw = 150 * s;
+  for (let i = 0; i < 9; i++) { ctx.fillStyle = '#9AA3B5'; rr(bx + i * 16.5 * s, iy - 7 * s, 11 * s, 14 * s, 2 * s); ctx.fill(); }
+  if (redactU > 0) { ctx.fillStyle = INK; rr(bx - 4 * s, iy - 11 * s, (bw + 4 * s) * redactU, 22 * s, 4 * s); ctx.fill(); }
+  if (lockU > 0) lockIcon(bx + bw * .5, iy - 1 * s, s * 1.05 * back(clamp(lockU), 2.2), clamp(lockU * 2));
+  // שורות הסכומים מהטופס האמיתי
+  const rows = [['158', fmt(f.p.income)], ['042', fmt(f.p.tax)]];
+  rows.forEach((r, i) => {
+    const ry = -h / 2 + (122 + i * 40) * s;
+    ctx.fillStyle = i === 1 ? '#FFF4DC' : '#F1F4FA'; rr(-w / 2 + 14 * s, ry - 15 * s, w - 28 * s, 30 * s, 6 * s); ctx.fill();
+    text(r[0], w / 2 - 24 * s, ry, 15 * s, 800, i === 1 ? '#8A5300' : NAVY, 'right', 'ltr');
+    text(r[1], -w / 2 + 24 * s, ry, 17 * s, 800, INK, 'left', 'ltr');
+  });
+  for (let i = 0; i < 4; i++) { ctx.fillStyle = '#E3E8F2'; rr(-w / 2 + 16 * s, -h / 2 + (214 + i * 22) * s, (w - 32 * s) * (i % 2 ? .62 : .84), 9 * s, 4 * s); ctx.fill(); }
+  ctx.restore();
+}
+
+// the Tax Authority personal area: the forms come out of it, one per employer per year
+function drawPortal(t) {
+  const inU = eout(prog(T.portal0, T.portal0 + .45, t)), outU = eio(prog(T.portalOut0, T.portalOut1, t));
+  if (inU <= 0 || outU >= 1) return;
+  const P = L.portrait, w = L.portalW, h = L.portalH, x = W / 2, y = L.portalY - outU * 60 - (1 - inU) * 40;
+  ctx.save(); ctx.globalAlpha = inU * (1 - outU);
+  ctx.shadowColor = 'rgba(14,26,58,.28)'; ctx.shadowBlur = 34; ctx.shadowOffsetY = 12;
+  const g = ctx.createLinearGradient(0, y - h / 2, 0, y + h / 2); g.addColorStop(0, '#1F2D57'); g.addColorStop(1, NAVY);
+  ctx.fillStyle = g; rr(x - w / 2, y - h / 2, w, h, h / 2); ctx.fill(); ctx.shadowColor = 'transparent';
+  // the slot glows while forms are coming out
+  const last = forms.length ? forms[forms.length - 1].a0 + .3 : 0;
+  const busy = prog(T.arrive0 - .2, T.arrive0, t) * (1 - prog(last, last + .4, t));
+  ctx.save(); ctx.shadowColor = TEAL; ctx.shadowBlur = 26 * busy; ctx.fillStyle = lerpColor('#2B3B6E', '#5FE0D0', busy);
+  rr(x - w * .36, y + h / 2 - 9, w * .72, 7, 4); ctx.fill(); ctx.restore();
+  lockIcon(x + w / 2 - h * .52, y - 4, P ? 1.25 : 1.5, 1);
+  text('רשות המסים · האזור האישי', x + w / 2 - h * .95, y - 4, P ? 27 : 33, 800, '#fff', 'right');
+  // how many forms came out so far
+  const out = forms.filter(f => t >= f.a0 + .1).length;
+  if (out) { const bx = x - w / 2 + h * .62;
+    ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(bx, y - 4, h * .3, 0, 6.283); ctx.fill();
+    text(String(out), bx, y - 2, P ? 28 : 34, 900, NAVY, 'center', 'ltr'); }
+  ctx.restore();
+}
+
+function coinShape(x, y, r, spin, a = 1) {
+  ctx.save(); ctx.globalAlpha *= a; ctx.translate(x, y);
+  const sx = Math.max(.25, Math.abs(Math.cos(spin)));
+  ctx.scale(sx, 1);
+  const g = ctx.createLinearGradient(-r, -r, r, r); g.addColorStop(0, '#FFE08A'); g.addColorStop(.55, GOLD); g.addColorStop(1, GOLD2);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = 'rgba(138,83,0,.55)'; ctx.lineWidth = r * .14; ctx.beginPath(); ctx.arc(0, 0, r * .74, 0, 6.283); ctx.stroke();
+  if (sx > .55) text('₪', 0, r * .04, r * 1.05, 900, '#8A5300', 'center', 'ltr');
+  ctx.restore();
+}
+function star(x, y, r, a) {
+  ctx.save(); ctx.globalAlpha *= a; ctx.translate(x, y); ctx.fillStyle = '#FFC93C';
+  ctx.beginPath(); ctx.moveTo(0, -r); ctx.quadraticCurveTo(0, 0, r, 0); ctx.quadraticCurveTo(0, 0, 0, r);
+  ctx.quadraticCurveTo(0, 0, -r, 0); ctx.quadraticCurveTo(0, 0, 0, -r); ctx.fill(); ctx.restore();
+}
+
+// ---------------------------------------------------------------- the frame
+function draw(t) {
+  const c = camera(t);
+  drawBg(t, c);
+  ctx.setTransform(DPR * SC, 0, 0, DPR * SC, 0, 0);
+  if (!YRS.length) { text('אין נתונים', W / 2, H / 2, 60, 800, NAVY); return; }
+  setCam(c);
+  const P = L.portrait;
+  const cardW = P ? 250 : 350, cardH = cardW * 1.3;
+  const endU = eio(prog(T.end0, T.end1, t));
+  const shift = endU * (P ? H * .02 : H * .075);          // בסוף הגרף יורד ומתכווץ ומפנה מקום לכרטיס
+  const shrink = 1 - endU * (P ? .16 : .27);
+
+  // 1. columns
+  const growU = prog(T.grow0, T.grow1, t);
+  YRS.forEach((y, yi) => {
+    const x = L.xs[yi], g = colGeom(y), cw = L.colW;
+    const gu = eout(prog(yi * .09, 1, growU));
+    const lit = y.status === 'promising' && y.in_window;
+    let drained = 0;
+    if (lit) { const out = coins.filter(c => c.yi === yi && t >= c.t0); drained = out.length ? Math.max(...out.map(c => c.frac)) : 0; }
+    // the overpaid part leaves the column with the coins, so the column ends exactly at the line
+    const h = (g.h - g.slice * drained) * gu * shrink, base = L.base + shift;
+    if (h <= .5) return;
+    const li = PROM.indexOf(y);
+    const litU = lit ? prog(T.lit0 + li * .32, T.lit0 + li * .32 + .5, t) : 0;
+    const dimU = !lit ? prog(T.lit0, T.lit0 + .5, t) : 0;
+    // floor reflection
+    const rg = ctx.createLinearGradient(0, base, 0, base + Math.min(h * .35, 90));
+    rg.addColorStop(0, `rgba(14,26,58,${.10 * (1 - dimU * .6)})`); rg.addColorStop(1, 'rgba(14,26,58,0)');
+    ctx.fillStyle = rg; ctx.fillRect(x - cw / 2, base + 3, cw, Math.min(h * .35, 90));
+    // body (what was withheld)
+    const grad = ctx.createLinearGradient(0, base - h, 0, base);
+    grad.addColorStop(0, dimU ? lerpColor('#24346A', '#C9D0DE', dimU) : '#24346A'); grad.addColorStop(1, dimU ? lerpColor(NAVY, '#B9C1D2', dimU) : NAVY);
+    ctx.fillStyle = grad; rr(x - cw / 2, base - h, cw, h, [cw * .16, cw * .16, 4, 4]); ctx.fill();
+    // gloss: a thin light edge on the right side of every column
+    const gl = ctx.createLinearGradient(x - cw / 2, 0, x + cw / 2, 0); gl.addColorStop(0, 'rgba(255,255,255,0)'); gl.addColorStop(.82, 'rgba(255,255,255,0)'); gl.addColorStop(.93, `rgba(255,255,255,${.07 * (1 - dimU)})`); gl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gl; rr(x - cw / 2, base - h, cw, h, [cw * .16, cw * .16, 4, 4]); ctx.fill();
+    // the correct-tax line drops from the top to where it should be
+    const lu = eio(prog(T.line0 + yi * .1, T.line0 + yi * .1 + .8, t));
+    if (lu > 0) {
+      const hs = g.hs * gu * shrink;
+      const ly = base - lerp(g.h * gu * shrink, hs, lu);
+      const sh = (base - h) < ly ? ly - (base - h) : 0;     // overpaid slice above the line
+      if (sh > .5) {
+        const top = ly - sh;
+        if (lit && litU > 0) {
+          ctx.save(); ctx.shadowColor = `rgba(255,170,20,${.9 * litU})`; ctx.shadowBlur = 56 * litU;
+          const sg = ctx.createLinearGradient(0, top, 0, ly); sg.addColorStop(0, '#FFE08A'); sg.addColorStop(1, GOLD2);
+          ctx.fillStyle = sg; ctx.globalAlpha = .25 + .75 * litU; rr(x - cw / 2, top, cw, sh, [cw * .16, cw * .16, 0, 0]); ctx.fill(); ctx.restore();
+          // light rays behind the lit slice
+          const ray = litU * (1 - prog(T.pour0, T.pour0 + .8, t));
+          if (ray > 0) { const rgr = ctx.createRadialGradient(x, top + sh / 2, 0, x, top + sh / 2, cw * 1.6);
+            rgr.addColorStop(0, `rgba(255,200,80,${.35 * ray})`); rgr.addColorStop(1, 'rgba(255,200,80,0)');
+            ctx.fillStyle = rgr; ctx.fillRect(x - cw * 1.6, top + sh / 2 - cw * 1.6, cw * 3.2, cw * 3.2); }
+          const firstOut = Math.min(...coins.filter(c => c.yi === yi).map(c => c.t0));
+          const tagA = litU * (1 - prog(firstOut - .1, firstOut + .35, t));
+          if (tagA > 0) { const inside = sh > (P ? 46 : 60);   // פרוסה גבוהה: הסכום בתוכה, כדי לא להתנגש במונה
+            text(`+${fmt(y.high)}`, x, inside ? top + sh / 2 : top - (P ? 34 : 44), P ? 34 : 46, 900, inside ? '#5A3300' : '#B86E00', 'center', 'ltr', tagA); }
+          const flash = Math.max(0, 1 - Math.abs(litU - .5) * 4);
+          if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${.75 * flash})`; rr(x - cw / 2, top, cw, sh, [cw * .16, cw * .16, 0, 0]); ctx.fill(); }
+        } else {
+          ctx.fillStyle = lit ? '#33457C' : `rgba(185,193,210,${.6 + .4 * dimU})`;
+          rr(x - cw / 2, top, cw, sh, [cw * .16, cw * .16, 0, 0]); ctx.fill();
+        }
+      }
+      ctx.save(); ctx.shadowColor = 'rgba(18,181,165,.6)'; ctx.shadowBlur = 14;
+      ctx.fillStyle = dimU && !lit ? lerpColor(TEAL, '#8FD9D1', dimU) : TEAL;
+      rr(x - cw / 2 - 12, ly - 4, cw + 24, 8, 4); ctx.fill(); ctx.restore();
+      if (!lit && dimU > 0) {     // a clean year: the employer got it right
+        text(y.status === 'owe' ? 'לבדוק' : 'תקין', x, base - h - (P ? 30 : 38), P ? 28 : 34, 800, y.status === 'owe' ? '#A3132E' : '#0E8F83', 'center', 'rtl', dimU);
+      }
+    }
+    // year label
+    const yc = lit && litU > 0 ? lerpColor(NAVY, '#B86E00', litU) : (dimU ? lerpColor(NAVY, MUTE, dimU) : NAVY);
+    text(String(y.year), x, L.yearY + shift, P ? 34 : 50, 900, yc, 'center', 'ltr', prog(T.fly0 + .6, T.fly1, t));
+    if (lit && litU > 0) { ctx.fillStyle = GOLD; ctx.globalAlpha = litU; rr(x - (P ? 30 : 46), L.yearY + shift + (P ? 24 : 34), (P ? 60 : 92) * litU, 7, 4); ctx.fill(); ctx.globalAlpha = 1; }
+  });
+
+  // sparks rise from the lit slices until the coins take over
+  sparks.forEach(s => {
+    const y = YRS[s.yi], li = PROM.indexOf(y), t0 = T.lit0 + li * .32 + .3 + s.t0;
+    const a = prog(t0, t0 + .2, t) * (1 - prog(T.pour0 + .3, T.pour0 + .9, t)) * (1 - prog(t0 + 1.2, t0 + 1.8, t));
+    if (a <= 0) return;
+    const g = colGeom(y), top = L.base - g.h;
+    star(L.xs[s.yi] + s.x * L.colW * 1.2 + Math.sin(t * 3 + s.ph) * 8, top - (t - t0) * s.sp, s.sz, a);
+  });
+
+  // 2. forms: come out of the personal area, fan out, ID gets wiped, then each flies to its year and sinks into the base
+  const scanX = lerp(W * 1.04, -W * .04, eio(prog(T.redact0, T.redact1, t)));
+  const slotY = L.portalY + L.portalH / 2;
+  forms.slice().reverse().forEach(f => {
+    if (t < f.a0) return;
+    const au = prog(f.a0, f.a0 + T.arriveDur, t), ae = eio(au);
+    const flyU = eio(prog(T.fly0 + f.order * .06, T.fly0 + f.order * .06 + .8, t));
+    if (flyU >= 1 && t > T.grow0 + .6) return;
+    // arrival: from the slot of the personal area, along an arc, growing as it comes to the viewer
+    const ax = lerp(W / 2, f.fx, ae) + Math.sin(ae * Math.PI) * f.bend * 40;
+    const ay = lerp(slotY + cardH * .12, f.fy, ae) + Math.sin(ae * Math.PI) * (P ? 30 : 60);
+    const aScale = lerp(.22, 1, back(au, 1.1));
+    const tx = L.xs[f.yi] + (f.k - (f.n - 1) / 2) * 30, ty = L.base - cardH * .2 + f.k * 12;
+    const scl = lerp(aScale, P ? .42 : .46, flyU);
+    const x = lerp(ax, tx, flyU), y = lerp(ay, ty, flyU) - Math.sin(flyU * Math.PI) * 140;
+    const fade = 1 - prog(T.grow0 + .1, T.grow0 + .6, t);
+    const red = clamp((f.fx + cardW * .3 - scanX) / (cardW * .6));
+    const lockU = prog(T.lock + f.order * .04, T.lock + f.order * .04 + .35, t) * (1 - flyU);
+    const rot = lerp(lerp(f.rot0 * .8, f.frot, ae), 0, flyU);
+    ctx.save(); ctx.globalAlpha = fade * clamp(au * 4);
+    formCard(f, x, y, cardW * scl, cardH * scl, rot, t >= T.redact0 ? red : 0, lockU, Math.sin(au * Math.PI) * .5 + Math.sin(flyU * Math.PI) * .3);
+    ctx.restore();
+  });
+  drawPortal(t);   // on top of the forms: they slide out from under it
+  // the privacy scanner: one bright line sweeps across every form and blacks out the ID numbers
+  const scU = prog(T.redact0, T.redact1, t);
+  if (scU > 0 && scU < 1) {
+    ctx.save();
+    const g = ctx.createLinearGradient(scanX - 160, 0, scanX + 40, 0);
+    g.addColorStop(0, 'rgba(18,181,165,0)'); g.addColorStop(.75, 'rgba(18,181,165,.24)'); g.addColorStop(1, 'rgba(18,181,165,0)');
+    ctx.fillStyle = g; ctx.fillRect(scanX - 160, -H, 200, H * 3);
+    ctx.shadowColor = TEAL; ctx.shadowBlur = 34; ctx.fillStyle = TEAL; ctx.fillRect(scanX - 4, -H, 8, H * 3);
+    ctx.restore();
+  }
+
+  // 3. coins pour into the counter
+  const cY = L.counterY;
+  let arrived = 0;
+  coins.forEach(c => {
+    if (t < c.t0) return;
+    const u = prog(c.t0, c.t0 + c.dur, t);
+    if (u >= 1) { arrived += c.value; return; }
+    const y = YRS[c.yi], g = colGeom(y);
+    const sx = L.xs[c.yi] + c.jx, sy = L.base - g.h * shrink + 18;
+    const ex = W / 2 + (c.order % 7 - 3) * 22, ey = cY + (P ? 70 : 96);
+    const mx = lerp(sx, ex, .5) + c.bend, my = Math.min(sy, ey) - 140;
+    const at = e => { const q = eio(clamp(e)); return [(1 - q) * (1 - q) * sx + 2 * (1 - q) * q * mx + q * q * ex, (1 - q) * (1 - q) * sy + 2 * (1 - q) * q * my + q * q * ey, q]; };
+    const r0 = (P ? 20 : 28), fadeA = 1 - prog(.8, 1, u);
+    [[.09, .16], [.045, .32]].forEach(([d, a]) => { const [tx, ty, q] = at(u - d); if (u - d > 0) coinShape(tx, ty, r0 * lerp(1, .6, q) * .85, c.spin + t * 9, a * fadeA); });
+    const [x, yy, e] = at(u);
+    coinShape(x, yy, r0 * lerp(1, .6, e), c.spin + t * 9, fadeA);
+  });
+  if (t >= T.pour1) arrived = TOTAL_HI;
+
+  // 4. the counter
+  const firstIn = coins.length ? Math.min(...coins.map(c => c.t0 + c.dur)) : T.pour0;
+  const cu = prog(firstIn - .35, firstIn, t);
+  if (cu > 0 && PROM.length) {
+    const burstU = prog(T.burst, T.burst + .8, t);
+    const pulse = 1 + .1 * Math.sin(Math.PI * clamp(burstU * 1.6));
+    const rangeU = eio(prog(T.range0, T.range1, t));
+    const size = (P ? 112 : 176) * pulse * lerp(1, .78, rangeU);
+    ctx.save(); ctx.globalAlpha = cu;
+    const glowR = (P ? 260 : 430) * (.35 + .65 * clamp(arrived / Math.max(1, TOTAL_HI))) * (1 + .25 * Math.sin(Math.PI * burstU));
+    const rg = ctx.createRadialGradient(W / 2, cY, 0, W / 2, cY, glowR);
+    rg.addColorStop(0, 'rgba(255,200,80,.45)'); rg.addColorStop(1, 'rgba(255,200,80,0)');
+    ctx.fillStyle = rg; ctx.fillRect(W / 2 - glowR, cY - glowR, glowR * 2, glowR * 2);
+    if (burstU > 0 && burstU < 1) {
+      [0, .18].forEach(d => { const b = clamp((burstU - d) / (1 - d)); if (b <= 0) return;
+        ctx.strokeStyle = `rgba(255,178,30,${1 - b})`; ctx.lineWidth = 12 * (1 - b);
+        ctx.beginPath(); ctx.ellipse(W / 2, cY, 170 + b * 620, 64 + b * 230, 0, 0, 6.283); ctx.stroke(); });
+      const rb = rng(5);
+      for (let i = 0; i < 40; i++) { const a = rb() * 6.283, d = (120 + rb() * 460) * eout(burstU), fall = burstU * burstU * 160;
+        coinShape(W / 2 + Math.cos(a) * d * 1.6, cY + Math.sin(a) * d * .6 + fall, 11 + rb() * 9, a * 3 + t * 6, 1 - burstU); }
+      for (let i = 0; i < 24; i++) { const a = rb() * 6.283, d = (200 + rb() * 520) * eout(burstU);
+        star(W / 2 + Math.cos(a) * d * 1.5, cY + Math.sin(a) * d * .7, 6 + rb() * 8, (1 - burstU) * .9); }
+    }
+    const val = Math.min(TOTAL_HI, Math.round(arrived / 10) * 10);
+    const s = rangeU > 0 ? `${fmt(TOTAL_LO)}-${fmt(TOTAL_HI)} ₪` : `${fmt(val)} ₪`;
+    ctx.save(); ctx.shadowColor = 'rgba(255,170,20,.55)'; ctx.shadowBlur = 36 * (1 - rangeU * .5);
+    text(s, W / 2, cY, size, 900, NAVY, 'center', 'ltr'); ctx.restore();
+    // small caption under the range: what this number is
+    text(`הערכה זהירה · ${PROM.length} שנים`, W / 2, cY + size * .64, P ? 32 : 42, 800, '#8A5300', 'center', 'rtl', rangeU);
+    ctx.restore();
+  } else if (!PROM.length && t > T.lit1) {
+    text('לא מצאנו שנה עם החזר', W / 2, cY, P ? 54 : 72, 900, NAVY, 'center', 'rtl', prog(T.lit1, T.lit1 + .5, t));
+  }
+
+  // 5. the end card: what you take with you (the years to claim, and the papers to attach)
+  if (endU > 0 && PROM.length) {
+    const chips = PROM.slice().sort((a, b) => a.year - b.year);
+    const cw = P ? 300 : 290, ch = P ? 96 : 108, gap = P ? 18 : 24;
+    const perRow = P ? 2 : 6, rows = Math.ceil(chips.length / perRow);
+    const y0 = P ? L.yearY + shift + 92 : L.top;
+    chips.forEach((y, i) => {
+      const row = Math.floor(i / perRow), col = i % perRow, inRow = Math.min(perRow, chips.length - row * perRow);
+      const rowW = inRow * cw + (inRow - 1) * gap;
+      const x = W / 2 + rowW / 2 - cw / 2 - col * (cw + gap);
+      const yy = P ? y0 + row * (ch + 14) : H * .345 + row * (ch + 14);
+      const u = back(prog(T.end0 + .1 + i * .12, T.end0 + .6 + i * .12, t));
+      if (u <= 0) return;
+      ctx.save(); ctx.translate(x, yy); ctx.scale(u, u);
+      ctx.shadowColor = 'rgba(255,150,0,.3)'; ctx.shadowBlur = 26; ctx.fillStyle = '#fff'; rr(-cw / 2, -ch / 2, cw, ch, 22); ctx.fill();
+      ctx.shadowColor = 'transparent'; ctx.strokeStyle = GOLD; ctx.lineWidth = 4; ctx.stroke();
+      text(String(y.year), cw / 2 - 22, -ch * .17, P ? 30 : 36, 900, NAVY, 'right', 'ltr');
+      text(`${fmt(y.low)}-${fmt(y.high)} ₪`, cw / 2 - 22, ch * .22, P ? 25 : 30, 800, '#8A5300', 'right', 'ltr');
+      if (y.closing) { const pw = P ? 118 : 138, pu = .5 + .5 * Math.sin(Math.max(0, t - T.end1) * 6);
+        ctx.save(); ctx.shadowColor = `rgba(225,29,72,${.55 * pu})`; ctx.shadowBlur = 18 * pu;
+        ctx.fillStyle = '#E11D48'; rr(-cw / 2 + 12, -ch / 2 + 14, pw, 34, 17); ctx.fill(); ctx.restore();
+        text('נסגרת 31.12', -cw / 2 + 12 + pw / 2, -ch / 2 + 32, P ? 18 : 21, 800, '#fff'); }
+      ctx.restore();
+    });
+    // document checklist: each one gets its tick
+    const docs = topDocs();
+    const dy = P ? y0 + rows * (ch + 14) + 40 : H * .345 + rows * (ch + 14) + 30;
+    if (!P) {
+      const dw = 286, dg = 18, tw = docs.length * dw + (docs.length - 1) * dg;
+      docs.forEach((d, i) => {
+        const u = eout(prog(T.end1 - .55 + i * .14, T.end1 - .1 + i * .14, t));
+        if (u <= 0) return;
+        const x = W / 2 + tw / 2 - dw / 2 - i * (dw + dg);
+        ctx.save(); ctx.globalAlpha = u; ctx.translate(0, (1 - u) * 20);
+        ctx.fillStyle = 'rgba(255,255,255,.94)'; rr(x - dw / 2, dy - 30, dw, 60, 30); ctx.fill();
+        ctx.strokeStyle = '#C9D1E0'; ctx.lineWidth = 2; ctx.stroke();
+        const ck = eout(prog(T.end1 - .2 + i * .14, T.end1 + .15 + i * .14, t));
+        ctx.fillStyle = lerpColor('#DCE2EE', TEAL, ck); ctx.beginPath(); ctx.arc(x + dw / 2 - 30, dy, 15, 0, 6.283); ctx.fill();
+        if (ck > 0) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath();
+          const p0 = [x + dw / 2 - 37, dy], p1 = [x + dw / 2 - 31, dy + 6], p2 = [x + dw / 2 - 22, dy - 6];
+          ctx.moveTo(...p0); const a = clamp(ck * 2), b = clamp(ck * 2 - 1);
+          ctx.lineTo(lerp(p0[0], p1[0], a), lerp(p0[1], p1[1], a)); if (b > 0) ctx.lineTo(lerp(p1[0], p2[0], b), lerp(p1[1], p2[1], b)); ctx.stroke(); }
+        text(d, x + dw / 2 - 56, dy + 1, 24, 700, INK, 'right');
+        ctx.restore();
+      });
+    }
+  }
+  drawVignette(t);
+}
+function topDocs() {
+  const s = new Set(['106 מכל מעסיק']);
+  PROM.forEach(y => y.docs.forEach(d => {
+    if (d.includes('ביטוח לאומי')) s.add('אישור מביטוח לאומי');
+    if (d.includes('ספח')) s.add('ספח תעודת זהות');
+    if (d.includes('תואר')) s.add('אישור על התואר');
+    if (d.includes('שחרור')) s.add('תעודת שחרור');
+    if (d.includes('קבלות')) s.add('קבלות על תרומות');
+  }));
+  return [...s].slice(0, 5);
+}
+function lerpColor(a, b, u) {
+  const p = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)), A = p(a), B = p(b);
+  return '#' + A.map((v, i) => Math.round(lerp(v, B[i], clamp(u))).toString(16).padStart(2, '0')).join('');
+}
+
+// ---------------------------------------------------------------- sizing + playback
+function fit() {
+  const st = $('stage'), r = st.getBoundingClientRect();
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  const portrait = r.width < r.height * .9;
+  W = portrait ? 1080 : 1920; H = portrait ? 1350 : 1080;
+  SC = Math.min(r.width / W, r.height / H);
+  // fill the stage: extend the virtual canvas on the long side so nothing is letterboxed
+  W = r.width / SC; H = r.height / SC;
+  cv.width = Math.round(r.width * DPR); cv.height = Math.round(r.height * DPR);
+  layout();
+}
+let mode = 'idle', tStart = 0, tNow = 0, raf = 0;
+function setControls() {
+  const st = $('start');
+  if (st) { if (MODE === 'studio' && !PREVIEW) { st.hidden = false; st.classList.toggle('off', mode !== 'idle'); } else st.hidden = true; }
+  document.body.style.cursor = MODE === 'studio' && mode !== 'idle' ? 'none' : '';   // no mouse pointer in the filmed take
+  const ag = $('again'); if (ag) ag.hidden = mode !== 'end' || PREVIEW || MODE === 'studio';   // בסטודיו לא מופיע כפתור בפריים האחרון; רווח מריץ שוב
+}
+function play() {
+  cancelAnimationFrame(raf); mode = 'play'; setControls();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // בלי טבעת פוקוס בפריים
+  tStart = performance.now(); raf = requestAnimationFrame(loop);
+}
+function loop(now) {
+  tNow = (now - tStart) / 1000;
+  if (tNow >= T.end) {
+    tNow = T.end; draw(tNow); window.__state = 'end';
+    if (PREVIEW) { setTimeout(play, 1200); return; }
+    mode = 'end'; setControls(); return;
+  }
+  draw(tNow); window.__state = 'play';
+  raf = requestAnimationFrame(loop);
+}
+function reset() { cancelAnimationFrame(raf); mode = 'idle'; tNow = 0; window.__state = 'idle'; setControls(); draw(0); }
+window.__seek = t => { cancelAnimationFrame(raf); mode = 'seek'; tNow = t; window.__state = 'seek'; setControls(); draw(t); };
+window.__dur = T.end;
+window.__beats = T;
+addEventListener('keydown', e => {
+  if (e.target && e.target.closest && e.target.closest('main')) return;
+  if (e.code === 'Space') { e.preventDefault(); if (mode !== 'play') play(); }
+  if (e.key === 'r' || e.key === 'R' || e.key === 'ר') { e.preventDefault(); reset(); }
+});
+$('go').addEventListener('click', play);
+$('again').addEventListener('click', play);
+let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { fit(); draw(tNow); }, 120); });
+
+// ---------------------------------------------------------------- the written report (the same numbers, in words)
+function renderReport() {
+  const D = DATA, m = $('main');
+  const st = {promising: 'נראית מבטיחה', small: 'החזר קטן, כנראה לא שווה', none: 'לא נראה החזר', owe: 'זהירות: אולי יש חוב'};
+  const prom = D.years.filter(y => y.status === 'promising' && y.in_window);
+  let h = `<p class="lead">צייד החזרי המס${D.name ? ' · ' + esc(D.name) : ''} · ${esc(D.generated)}</p>`;
+  if (prom.length) {
+    h += `<h1>נראה שמס הכנסה חייב לך כסף</h1><div class="sum"><p>הערכה זהירה על ${prom.length} שנים (${prom.map(y => y.year).join(', ')}):</p>
+      <div class="big">${fmt(D.total_low)}-${fmt(D.total_high)} ₪</div>
+      <p class="note">המספר הנמוך משאיר מרווח ביטחון של 15%. לכל החזר מוסיפה רשות המסים הפרשי הצמדה וריבית של 4% לשנה, והם לא נכללים כאן.</p></div>`;
+  } else {
+    h += `<h1>לפי הטפסים, אין כרגע שנה עם החזר שווה</h1><div class="sum"><p>זה גם מידע טוב: המעסיקים ניכו בערך את מה שצריך. שווה לבדוק את הסעיף "ייתכן שמגיע לך עוד".</p></div>`;
+  }
+  h += `<p class="noprint"><button class="btn alt" id="replay">▶ לראות שוב את ההמחשה</button> <button class="btn alt" id="print">שמירה כ-PDF</button></p>`;
+  h += `<h2>שנה אחרי שנה</h2><div class="years">`;
+  D.years.forEach(y => {
+    h += `<section class="yr ${y.status}" aria-label="שנת ${y.year}"><div class="hd"><h3>${y.year}</h3><span class="badge">${y.in_window ? st[y.status] : 'מחוץ לחלון שש השנים'}</span></div>`;
+    if (y.status === 'promising') h += `<div class="amt">${fmt(y.low)}-${fmt(y.high)} ₪</div>`;
+    h += `<div class="nums"><span>נוכה ממך מס</span><b>${fmt(y.withheld)} ₪</b><span>לפי החישוב היה צריך</span><b>${fmt(y.should_pay)} ₪</b><span>הכנסה בשנה</span><b>${fmt(y.income)} ₪</b></div>`;
+    h += `<p class="note">מאיפה: ${y.payers.map(p => esc(p.name) + (p.months ? ` (${p.months} חודשים)` : '')).join(', ')}</p>`;
+    if (y.status === 'promising' || y.status === 'small') {
+      h += `<p><b>למה</b></p><ul class="why">${y.reasons.map(r => `<li>${esc(r.label)}${r.amount != null ? `: <b>${fmt(r.amount)} ₪</b>` : ''} · <a href="${esc(r.source)}" target="_blank" rel="noopener">המקור</a></li>`).join('')}</ul>`;
+    }
+    if (y.status === 'promising') h += `<p><b>מה לצרף</b></p><ul>${y.docs.map(d => `<li>${esc(d)}</li>`).join('')}</ul><p class="note">אפשר להגיש עד ${y.deadline}</p>`;
+    if (y.closing && y.status === 'promising') h += `<div class="closing">השנה הזו נסגרת ב-${y.deadline}. אחרי זה כבר אי אפשר לבקש עליה החזר.</div>`;
+    if (y.status === 'owe') h += `<p>לפי החישוב נוכה פחות מהנדרש. לא כדאי להגיש בקשה על השנה הזו בלי בדיקה מקצועית.</p>`;
+    h += `</section>`;
+  });
+  h += `</div>`;
+  if (D.missing_years && D.missing_years.length) h += `<p class="note">אין טופס לשנים ${D.missing_years.join(', ')}. אם עבדת בהן, שווה להוריד את טופסי ה-106 מהמעסיק או מהאזור האישי באתר רשות המסים ולהריץ שוב.</p>`;
+  if (D.flags && D.flags.length) {
+    h += `<h2>ייתכן שמגיע לך עוד</h2><ul>${D.flags.map(f => `<li><b>${esc(f.title)}.</b> ${esc(f.text)} <a href="${esc(f.source)}" target="_blank" rel="noopener">המקור</a></li>`).join('')}</ul>`;
+  }
+  if (prom.length) {
+    h += `<h2>איך מגישים, בלי רואה חשבון</h2><ol class="steps">
+      <li><span>אוספים לכל שנה את המסמכים מהרשימה שלמעלה, סרוקים או מצולמים.</span></li>
+      <li><span>נכנסים למערכת המקוונת של רשות המסים, מזדהים, ופותחים "תיק להחזר מס". זה לא תיק פעיל ולא הופך אותך לעצמאי.</span></li>
+      <li><span>ממלאים בקשה נפרדת לכל שנה: מעתיקים מכל 106 את שדה 158 (או 172, כשזו ההכנסה של בן או בת הזוג) ואת שדה 042, מסמנים את נקודות הזיכוי ומצרפים קבצים.</span></li>
+      <li><span>שולחים. ההחזר נכנס לחשבון הבנק, בתוספת הצמדה וריבית.</span></li></ol>
+      <p><a class="btn" href="${esc(D.links.online)}" target="_blank" rel="noopener">לבקשה המקוונת</a><a class="btn alt" href="${esc(D.links.form135)}" target="_blank" rel="noopener">טופס 135 הרשמי</a></p>
+      <p class="note">ההגשה חינם. חברות להחזרי מס גובות עמלה, ואת אותה בקשה אפשר להגיש לבד. נשואים מגישים בקשה אחת עם ההכנסות של שני בני הזוג.</p>`;
+  }
+  h += `<div class="disc"><p><b>חשוב לדעת.</b> ${esc(D.disclaimer)}</p><p class="note">פרטיות: הדף נוצר במחשב שלך ולא נשלח לשום מקום. מספרי תעודת זהות נמחקו מהטפסים לפני כל דבר אחר. ערכי המס נבדקו מול כל זכות ורשות המסים ב-${esc(D.rules_checked)}.${D.years.filter(y => (y.notes || []).length && y.status === 'promising').map(y => ` בשנת ${y.year} ערך אחד (תקרת ההפקדה לפנסיה) לא נמצא במקור רשמי, ולכן נבחר הערך הזהיר.`).join('')}</p></div>`;
+  m.innerHTML = h;
+  $('replay').addEventListener('click', () => { $('stage').scrollIntoView({behavior: 'smooth'}); play(); });
+  $('print').addEventListener('click', () => print());
+}
+
+(async function boot() {
+  cv = $('cv'); ctx = cv.getContext('2d', {alpha: false});
+  if (MODE === 'studio') $('again').remove();          // nothing but the start button in the filmed screen
+  else $('start').remove();
+  try { await Promise.all([document.fonts.load(`900 60px ${FONT}`, 'אב12'), document.fonts.load(`700 30px ${FONT}`, 'אב12')]); } catch (e) {}
+  fit();
+  if (MODE === 'report' && DATA) renderReport();
+  const q = QS.get('t');
+  if (q !== null) { window.__seek(+q); window.__ready = true; return; }
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  reset();
+  window.__ready = true;
+  if (PREVIEW || (MODE === 'report' && !reduce)) play();
+  else if (MODE === 'report') window.__seek(T.end);
+})().catch(e => console.error(e));
+</script>
+</body>
+</html>

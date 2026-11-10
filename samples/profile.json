@@ -1,0 +1,35 @@
+{
+ "display_name": "נועה (דמות בדויה)",
+ "gender": "female",
+ "children": [
+  {
+   "birth_year": 2023,
+   "role": "primary"
+  }
+ ],
+ "degrees": [
+  {
+   "kind": "first",
+   "completed": 2020,
+   "study_years": 3
+  }
+ ],
+ "service": null,
+ "donations": {
+  "2021": 600
+ },
+ "flags": {},
+ "answers": {
+  "job_change": [
+   2022
+  ],
+  "gap": [
+   2020,
+   2022
+  ],
+  "btl": [
+   2020,
+   2023
+  ]
+ }
+}

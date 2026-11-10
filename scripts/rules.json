@@ -1,0 +1,235 @@
+{
+ "_about": "ערכי המס לכל שנה, כל ערך עם המקור שלו. נבדק ב-10.11.2026. ערך שלא נמצא לו מקור רשמי מסומן verified=false ונבחר בכיוון השמרני (שמקטין את ההחזר המשוער).",
+ "checked": "2026-11-10",
+ "sources": {
+  "brackets": "https://www.kolzchut.org.il/he/%D7%9E%D7%93%D7%A8%D7%92%D7%95%D7%AA_%D7%9E%D7%A1_%D7%94%D7%9B%D7%A0%D7%A1%D7%94_-_%D7%A0%D7%AA%D7%95%D7%A0%D7%99_%D7%A2%D7%91%D7%A8",
+  "points": "https://www.kolzchut.org.il/he/%D7%A0%D7%A7%D7%95%D7%93%D7%95%D7%AA_%D7%96%D7%99%D7%9B%D7%95%D7%99_%D7%9E%D7%9E%D7%A1_%D7%94%D7%9B%D7%A0%D7%A1%D7%94",
+  "children": "https://www.kolzchut.org.il/he/%D7%A0%D7%A7%D7%95%D7%93%D7%95%D7%AA_%D7%96%D7%99%D7%9B%D7%95%D7%99_%D7%9E%D7%9E%D7%A1_%D7%94%D7%9B%D7%A0%D7%A1%D7%94_%D7%9C%D7%94%D7%95%D7%A8%D7%94_%D7%9C%D7%99%D7%9C%D7%93_%D7%A2%D7%93_%D7%92%D7%99%D7%9C_5",
+  "children_6_17": "https://www.kolzchut.org.il/he/%D7%A0%D7%A7%D7%95%D7%93%D7%95%D7%AA_%D7%96%D7%99%D7%9B%D7%95%D7%99_%D7%9E%D7%9E%D7%A1_%D7%94%D7%9B%D7%A0%D7%A1%D7%94_%D7%9C%D7%94%D7%95%D7%A8%D7%99%D7%9D_%D7%9C%D7%99%D7%9C%D7%93%D7%99%D7%9D_%D7%91%D7%92%D7%99%D7%9C_17-6",
+  "degree": "https://www.gov.il/BlobFolder/generalpage/income-tax-monthly-deductions-booklet/he/generalInformation_income-tax-monthly-deductions-booklet_monthly-deductions-booklet-2024.pdf",
+  "service": "https://www.hachvana.mod.gov.il/Benefits/migufey/Pages/kitsbat.aspx",
+  "donations": "https://www.kolzchut.org.il/w/he/index.php?search=%D7%96%D7%99%D7%9B%D7%95%D7%99%20%D7%9E%D7%9E%D7%A1%20%D7%AA%D7%A8%D7%95%D7%9E%D7%95%D7%AA%20%D7%A1%D7%A2%D7%99%D7%A3%2046",
+  "pension": "https://www.gov.il/BlobFolder/generalpage/income-tax-annual-deductions-booklet/en/generalInformation_income-tax-yearly-deductions-booklet_yearly-deductions-booklet-2024.pdf",
+  "refund": "https://www.kolzchut.org.il/he/%D7%94%D7%97%D7%96%D7%A8_%D7%9E%D7%A1_%D7%94%D7%9B%D7%A0%D7%A1%D7%94",
+  "form135": "https://www.gov.il/he/service/itc135",
+  "online": "https://secapp.taxes.gov.il/srbksOpentik/#/mainPage",
+  "settlement": "https://www.kolzchut.org.il/w/he/index.php?search=%D7%99%D7%99%D7%A9%D7%95%D7%91%20%D7%9E%D7%96%D7%9B%D7%94%20%D7%94%D7%98%D7%91%D7%AA%20%D7%9E%D7%A1"
+ },
+ "years": {
+  "2020": {
+   "point": 2628,
+   "brackets": [
+    [
+     75960,
+     0.1
+    ],
+    [
+     108960,
+     0.14
+    ],
+    [
+     174960,
+     0.2
+    ],
+    [
+     243120,
+     0.31
+    ],
+    [
+     505920,
+     0.35
+    ],
+    [
+     651600,
+     0.47
+    ]
+   ],
+   "surtax_from": 651600,
+   "pension_ceiling_month": 8800,
+   "pension_verified": true,
+   "donation_min": 207,
+   "donation_min_verified": false
+  },
+  "2021": {
+   "point": 2616,
+   "brackets": [
+    [
+     75480,
+     0.1
+    ],
+    [
+     108360,
+     0.14
+    ],
+    [
+     173880,
+     0.2
+    ],
+    [
+     241680,
+     0.31
+    ],
+    [
+     502920,
+     0.35
+    ],
+    [
+     647640,
+     0.47
+    ]
+   ],
+   "surtax_from": 647640,
+   "pension_ceiling_month": 8700,
+   "pension_verified": false,
+   "donation_min": 207,
+   "donation_min_verified": false
+  },
+  "2022": {
+   "point": 2676,
+   "brackets": [
+    [
+     77400,
+     0.1
+    ],
+    [
+     110880,
+     0.14
+    ],
+    [
+     178080,
+     0.2
+    ],
+    [
+     247440,
+     0.31
+    ],
+    [
+     514920,
+     0.35
+    ],
+    [
+     663240,
+     0.47
+    ]
+   ],
+   "surtax_from": 663240,
+   "pension_ceiling_month": 8900,
+   "pension_verified": true,
+   "donation_min": 190,
+   "donation_min_verified": true
+  },
+  "2023": {
+   "point": 2820,
+   "brackets": [
+    [
+     81480,
+     0.1
+    ],
+    [
+     116760,
+     0.14
+    ],
+    [
+     187440,
+     0.2
+    ],
+    [
+     260520,
+     0.31
+    ],
+    [
+     542160,
+     0.35
+    ],
+    [
+     698280,
+     0.47
+    ]
+   ],
+   "surtax_from": 698280,
+   "pension_ceiling_month": 9400,
+   "pension_verified": true,
+   "donation_min": 200,
+   "donation_min_verified": true
+  },
+  "2024": {
+   "point": 2904,
+   "brackets": [
+    [
+     84120,
+     0.1
+    ],
+    [
+     120720,
+     0.14
+    ],
+    [
+     193800,
+     0.2
+    ],
+    [
+     269280,
+     0.31
+    ],
+    [
+     560280,
+     0.35
+    ],
+    [
+     721560,
+     0.47
+    ]
+   ],
+   "surtax_from": 721560,
+   "pension_ceiling_month": 9700,
+   "pension_verified": true,
+   "donation_min": 207,
+   "donation_min_verified": true
+  },
+  "2025": {
+   "point": 2904,
+   "brackets": [
+    [
+     84120,
+     0.1
+    ],
+    [
+     120720,
+     0.14
+    ],
+    [
+     193800,
+     0.2
+    ],
+    [
+     269280,
+     0.31
+    ],
+    [
+     560280,
+     0.35
+    ],
+    [
+     721560,
+     0.47
+    ]
+   ],
+   "surtax_from": 721560,
+   "pension_ceiling_month": 9700,
+   "pension_verified": true,
+   "donation_min": 207,
+   "donation_min_verified": true
+  }
+ },
+ "constants": {
+  "resident_points": 2.25,
+  "woman_points": 0.5,
+  "pension_credit_rate": 0.35,
+  "pension_share": 0.07,
+  "donation_credit_rate": 0.35,
+  "donation_income_share": 0.3,
+  "surtax_rate": 0.03,
+  "safety_margin": 0.15,
+  "worth_filing": 300
+ }
+}
