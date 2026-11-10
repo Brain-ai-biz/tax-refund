@@ -306,6 +306,16 @@ function draw(t) {
   const shift = endU * (P ? H * .02 : H * .075);          // בסוף הגרף יורד ומתכווץ ומפנה מקום לכרטיס
   const shrink = 1 - endU * (P ? .16 : .27);
 
+  // 0. warm light behind every lit slice (drawn first, so it sits behind the columns)
+  PROM.forEach(y => {
+    const yi = YRS.indexOf(y), li = PROM.indexOf(y), g = colGeom(y);
+    const ray = prog(T.lit0 + li * .32, T.lit0 + li * .32 + .5, t) * (1 - prog(T.pour0, T.pour0 + .8, t));
+    if (ray <= 0 || g.slice <= 0) return;
+    const x = L.xs[yi], cy = L.base + shift - (g.hs + g.slice / 2) * shrink, R = L.colW * 1.9;
+    const rgr = ctx.createRadialGradient(x, cy, 0, x, cy, R);
+    rgr.addColorStop(0, `rgba(255,196,70,${.5 * ray})`); rgr.addColorStop(1, 'rgba(255,196,70,0)');
+    ctx.fillStyle = rgr; ctx.fillRect(x - R, cy - R, R * 2, R * 2);
+  });
   // 1. columns
   const growU = prog(T.grow0, T.grow1, t);
   YRS.forEach((y, yi) => {
@@ -343,11 +353,6 @@ function draw(t) {
           ctx.save(); ctx.shadowColor = `rgba(255,170,20,${.9 * litU})`; ctx.shadowBlur = 56 * litU;
           const sg = ctx.createLinearGradient(0, top, 0, ly); sg.addColorStop(0, '#FFE08A'); sg.addColorStop(1, GOLD2);
           ctx.fillStyle = sg; ctx.globalAlpha = .25 + .75 * litU; rr(x - cw / 2, top, cw, sh, [cw * .16, cw * .16, 0, 0]); ctx.fill(); ctx.restore();
-          // light rays behind the lit slice
-          const ray = litU * (1 - prog(T.pour0, T.pour0 + .8, t));
-          if (ray > 0) { const rgr = ctx.createRadialGradient(x, top + sh / 2, 0, x, top + sh / 2, cw * 1.6);
-            rgr.addColorStop(0, `rgba(255,200,80,${.35 * ray})`); rgr.addColorStop(1, 'rgba(255,200,80,0)');
-            ctx.fillStyle = rgr; ctx.fillRect(x - cw * 1.6, top + sh / 2 - cw * 1.6, cw * 3.2, cw * 3.2); }
           const firstOut = Math.min(...coins.filter(c => c.yi === yi).map(c => c.t0));
           const tagA = litU * (1 - prog(firstOut - .1, firstOut + .35, t));
           if (tagA > 0) { const inside = sh > (P ? 46 : 60);   // פרוסה גבוהה: הסכום בתוכה, כדי לא להתנגש במונה
