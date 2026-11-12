@@ -10,7 +10,7 @@ def fill_from_encoding(enc: str) -> list[str]:
     for x in range(256):
         try:
             lst += (bytes((x,)).decode(enc),)
-        except Exception:
+        except UnicodeDecodeError:
             lst += (chr(x),)
     return lst
 
@@ -24,6 +24,10 @@ def rev_encoding(enc: list[str]) -> dict[str, int]:
         assert char not in rev, f"{char} at {i} already at {rev[char]}"
         rev[char] = i
     return rev
+
+
+def encoding_dict_from_named_encoding(encoding: str) -> dict[int, str]:
+    return dict(zip(range(256), fill_from_encoding(encoding)))
 
 
 _win_encoding = fill_from_encoding("cp1252")

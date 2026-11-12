@@ -47,8 +47,8 @@
    "surtax_from": 651600,
    "pension_ceiling_month": 8800,
    "pension_verified": true,
-   "donation_min": 207,
-   "donation_min_verified": false
+   "donation_min": 190,
+   "donation_min_verified": true
   },
   "2021": {
    "point": 2616,
@@ -80,9 +80,9 @@
    ],
    "surtax_from": 647640,
    "pension_ceiling_month": 8700,
-   "pension_verified": false,
-   "donation_min": 207,
-   "donation_min_verified": false
+   "pension_verified": true,
+   "donation_min": 190,
+   "donation_min_verified": true
   },
   "2022": {
    "point": 2676,

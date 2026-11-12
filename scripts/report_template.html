@@ -50,6 +50,8 @@ a{color:#2446C7}
 .badge{font-size:15px;font-weight:700;border-radius:999px;padding:5px 12px;background:#EEF1F7;color:var(--mute)}
 .promising .badge{background:#FFF1D6;color:#8A5300}
 .owe .badge{background:#FDE7EA;color:#A3132E}
+.check .badge{background:#FFF4D6;color:#8A5300}
+.top-disc{font-size:14px;color:#5b6475;margin:8px 0 0}
 .yr .amt{font-size:30px;font-weight:900;margin:10px 0 4px;direction:ltr;text-align:right;unicode-bidi:isolate}
 .nums{display:grid;grid-template-columns:1fr auto;gap:3px 10px;font-size:16px;color:var(--mute);margin:8px 0}
 .nums b{color:var(--ink);direction:ltr;unicode-bidi:isolate}
@@ -368,7 +370,7 @@ function draw(t) {
       ctx.fillStyle = dimU && !lit ? lerpColor(TEAL, '#8FD9D1', dimU) : TEAL;
       rr(x - cw / 2 - 12, ly - 4, cw + 24, 8, 4); ctx.fill(); ctx.restore();
       if (!lit && dimU > 0) {     // a clean year: the employer got it right
-        text(y.status === 'owe' ? 'לבדוק' : 'תקין', x, base - h - (P ? 30 : 38), P ? 28 : 34, 800, y.status === 'owe' ? '#A3132E' : '#0E8F83', 'center', 'rtl', dimU);
+        text(y.status === 'owe' || y.status === 'check' ? 'לבדוק' : 'תקין', x, base - h - (P ? 30 : 38), P ? 28 : 34, 800, y.status === 'owe' ? '#A3132E' : (y.status === 'check' ? '#8A5300' : '#0E8F83'), 'center', 'rtl', dimU);
       }
     }
     // year label
@@ -589,13 +591,14 @@ let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() 
 // ---------------------------------------------------------------- the written report (the same numbers, in words)
 function renderReport() {
   const D = DATA, m = $('main');
-  const st = {promising: 'נראית מבטיחה', small: 'החזר קטן, כנראה לא שווה', none: 'לא נראה החזר', owe: 'זהירות: אולי יש חוב'};
+  const st = {promising: 'נראית מבטיחה', small: 'החזר קטן, כנראה לא שווה', none: 'לא נראה החזר', owe: 'זהירות: אולי יש חוב', check: 'לבדוק עם איש מקצוע'};
   const prom = D.years.filter(y => y.status === 'promising' && y.in_window);
   let h = `<p class="lead">צייד החזרי המס${D.name ? ' · ' + esc(D.name) : ''} · ${esc(D.generated)}</p>`;
   if (prom.length) {
     h += `<h1>נראה שמס הכנסה חייב לך כסף</h1><div class="sum"><p>הערכה זהירה על ${prom.length} שנים (${prom.map(y => y.year).join(', ')}):</p>
       <div class="big">${fmt(D.total_low)}-${fmt(D.total_high)} ₪</div>
-      <p class="note">המספר הנמוך משאיר מרווח ביטחון של 15%. לכל החזר מוסיפה רשות המסים הפרשי הצמדה וריבית של 4% לשנה, והם לא נכללים כאן.</p></div>`;
+      <p class="note">המספר הנמוך משאיר מרווח ביטחון של 15%. לכל החזר מוסיפה רשות המסים הפרשי הצמדה וריבית של 4% לשנה, והם לא נכללים כאן.</p></div>
+      <p class="top-disc">הערכה אוטומטית בלבד, לא ייעוץ מס ולא התחייבות להחזר. לפני הגשה בודקים מול הטפסים, ובכל ספק מתייעצים עם איש מקצוע. הפרטים המלאים בתחתית הדף.</p>`;
   } else {
     h += `<h1>לפי הטפסים, אין כרגע שנה עם החזר שווה</h1><div class="sum"><p>זה גם מידע טוב: המעסיקים ניכו בערך את מה שצריך. שווה לבדוק את הסעיף "ייתכן שמגיע לך עוד".</p></div>`;
   }
@@ -612,6 +615,7 @@ function renderReport() {
     if (y.status === 'promising') h += `<p><b>מה לצרף</b></p><ul>${y.docs.map(d => `<li>${esc(d)}</li>`).join('')}</ul><p class="note">אפשר להגיש עד ${y.deadline}</p>`;
     if (y.closing && y.status === 'promising') h += `<div class="closing">השנה הזו נסגרת ב-${y.deadline}. אחרי זה כבר אי אפשר לבקש עליה החזר.</div>`;
     if (y.status === 'owe') h += `<p>לפי החישוב נוכה פחות מהנדרש. לא כדאי להגיש בקשה על השנה הזו בלי בדיקה מקצועית.</p>`;
+    if (y.status === 'check') h += `<p>${(y.complex || []).map(esc).join('. ')}. במצב כזה החישוב כאן לא אמין, ולכן השנה לא נכנסה לסכום. כדאי לבדוק אותה עם רואה חשבון או יועץ מס.</p>`;
     h += `</section>`;
   });
   h += `</div>`;
@@ -628,7 +632,7 @@ function renderReport() {
       <p><a class="btn" href="${esc(D.links.online)}" target="_blank" rel="noopener">לבקשה המקוונת</a><a class="btn alt" href="${esc(D.links.form135)}" target="_blank" rel="noopener">טופס 135 הרשמי</a></p>
       <p class="note">ההגשה חינם. חברות להחזרי מס גובות עמלה, ואת אותה בקשה אפשר להגיש לבד. נשואים מגישים בקשה אחת עם ההכנסות של שני בני הזוג.</p>`;
   }
-  h += `<div class="disc"><p><b>חשוב לדעת.</b> ${esc(D.disclaimer)}</p><p class="note">פרטיות: הדף נוצר במחשב שלך ולא נשלח לשום מקום. מספרי תעודת זהות נמחקו מהטפסים לפני כל דבר אחר. ערכי המס נבדקו מול כל זכות ורשות המסים ב-${esc(D.rules_checked)}.${D.years.filter(y => (y.notes || []).length && y.status === 'promising').map(y => ` בשנת ${y.year} ערך אחד (תקרת ההפקדה לפנסיה) לא נמצא במקור רשמי, ולכן נבחר הערך הזהיר.`).join('')}</p></div>`;
+  h += `<div class="disc"><p><b>דיסקליימר, חשוב לקרוא.</b> ${esc(D.disclaimer)}</p><p class="note">פרטיות: הדף נוצר במחשב שלך ולא נשלח לשום מקום. מספרי תעודת זהות נמחקו מהטפסים לפני כל דבר אחר. ערכי המס נבדקו מול כל זכות ורשות המסים ב-${esc(D.rules_checked)}.${D.years.filter(y => (y.notes || []).length && y.status === 'promising').map(y => ` בשנת ${y.year} ערך אחד (תקרת ההפקדה לפנסיה) לא נמצא במקור רשמי, ולכן נבחר הערך הזהיר.`).join('')}</p></div>`;
   m.innerHTML = h;
   $('replay').addEventListener('click', () => { $('stage').scrollIntoView({behavior: 'smooth'}); play(); });
   $('print').addEventListener('click', () => print());

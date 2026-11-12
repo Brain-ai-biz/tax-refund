@@ -11,7 +11,7 @@
     python3 tax_refund.py estimate --forms F --profile P --out RUN/result.json
     python3 tax_refund.py report --result RUN/result.json --out RUN/report.html [--open]
 
-זו הערכה ולא חישוב להגשה ולא ייעוץ מס.
+זו הערכה בלבד ולא ייעוץ מס. השימוש באחריות המשתמש (ראו DISCLAIMER למטה).
 """
 import argparse, datetime, json, math, os, re, sys, webbrowser
 from pathlib import Path
@@ -22,14 +22,21 @@ RULES = json.loads((HERE / "rules.json").read_text(encoding="utf-8"))
 C = RULES["constants"]
 SRC = RULES["sources"]
 
-DISCLAIMER = ("זו הערכה ולא חישוב להגשה ולא ייעוץ מס. היא נשענת על הנתונים מהטפסים ועל התשובות שלך, "
-              "ועלולות להיות בה טעויות. את הסכום הסופי קובעת רשות המסים אחרי שמגישים בקשה.")
+DISCLAIMER = ("זו הערכה אוטומטית בלבד, ולא ייעוץ מס, ייעוץ משפטי או חוות דעת מקצועית, ואין בה תחליף לבדיקה של רואה חשבון "
+              "או יועץ מס מוסמך. היא נשענת על מה שנקרא מהטפסים ועל התשובות שלך, ועלולות להיות בה טעויות, השמטות "
+              "ומצבים שהכלי לא מכיר. אין שום התחייבות שמגיע לך החזר או לגובה שלו. בקשה להחזר פותחת את כל השנה לבדיקה, "
+              "ובמקרים מסוימים היא יכולה להסתיים בחיוב במס. לפני הגשה בודקים את הנתונים מול הטפסים המקוריים, ובכל ספק "
+              "מתייעצים עם איש מקצוע. השימוש באחריותך בלבד, ויוצרי הכלי לא אחראים לנזק או להפסד שייגרמו משימוש בו. "
+              "את הסכום הסופי קובעת רשות המסים.")
 
 
 # ───────────────────────────── קריאת טפסים ומחיקת מספרי זהות
 
-ID_LABEL = re.compile(r'(מספר\s*זהות|מס[\'׳]?\s*זהות|ת\.?\s*ז\.?|ת"ז|ת״ז|תעודת\s*זהות|מספר\s*ת\.?ז\.?)\s*[:\-]?\s*([\d\s\-]{5,12})')
+ID_LABEL = re.compile(r'(מספר\s*זהות|מס[\'׳]?\s*זהות|ת\.?\s*ז\.?|ת"ז|ת״ז|תעודת\s*זהות|מספר\s*ת\.?ז\.?|דרכון)\s*[:\-]?\s*(\d(?:[\s\-./]{0,2}\d){4,8})')   # עד 9 ספרות, כדי לא לאכול סכום שאחריו
+BANK_LABEL = re.compile(r'(מספר\s*חשבון|מס[\'׳]?\s*חשבון|חשבון\s*בנק|מספר\s*סניף)\s*[:\-]?\s*(\d[\d\s\-/]{2,20})')
 LONG_DIGITS = re.compile(r'(?<![\d,.])\d(?:[\s\-]?\d){7,9}(?![\d,.])')
+GLUED_DIGITS = re.compile(r'\d{9,}')                       # ת"ז שנדבקה למספר אחר בחילוץ מ-PDF (סכומים לא מגיעים ל-9 ספרות)
+SEP_ID = re.compile(r'(?<![\d,.])\d{1,4}(?:[./]\d{1,4}){2,3}(?![\d,]|[./]\d)')   # ת"ז עם נקודות או לוכסנים
 
 
 def redact(text):
@@ -42,10 +49,18 @@ def redact(text):
         return m.group(1) + " [ת.ז. נמחק]"
     text = ID_LABEL.sub(lab, text)
 
+    def bank(m):
+        nonlocal n
+        n += 1
+        return m.group(1) + " [נמחק]"
+    text = BANK_LABEL.sub(bank, text)
+
     def dig(m):
         nonlocal n
         n += 1
         return "[מספר נמחק]"
+    text = GLUED_DIGITS.sub(dig, text)
+    text = SEP_ID.sub(lambda m: dig(m) if len(re.sub(r'\D', '', m.group())) == 9 else m.group(), text)   # תאריך = 8 ספרות, נשאר
     text = LONG_DIGITS.sub(dig, text)
     return text, n
 
@@ -80,7 +95,7 @@ def amount_after(code, text):
 
 
 def guess(text, name):
-    g = {"file": name, "year": None, "source": "106", "payer": None, "income": None, "tax": None, "pension": None, "months": None}
+    g = {"file": name, "year": None, "source": "106", "payer": None, "income": None, "tax": None, "pension": None, "months": None, "severance": None}
     if re.search(r'ביטוח\s*לאומי|המוסד לביטוח', text) and not re.search(r'106', text[:400]):
         g["source"] = "btl"
     ym = re.search(r'שנת\s*(?:ה)?מס[^\d]{0,12}(20[1-3]\d)', text) or re.search(r'(20[1-3]\d)\s*[^\d]{0,12}שנת\s*(?:ה)?מס', text)
@@ -94,6 +109,7 @@ def guess(text, name):
     g["income"] = inc
     g["tax"] = amount_after("042", text)
     g["pension"] = amount_after("086", text) or amount_after("045", text)
+    g["severance"] = amount_after("258", text) or amount_after("272", text)   # פיצויים/מענק חייבים: המס עליהם בתוך 042
     mm = (re.search(r'(?:חודשי\s*עבודה|מספר\s*חודשים)[^\d\n]{0,15}(\d{1,2})(?!\d)', text)
           or re.search(r'(?<![\d/])(\d{1,2})\s*(?:חודשי\s*עבודה|חודשים)', text))
     if mm and 1 <= int(mm.group(1)) <= 12:
@@ -120,7 +136,7 @@ def cmd_extract(a):
         files += sorted(p.glob("*.pdf")) + sorted(p.glob("*.PDF")) if p.is_dir() else [p]
     cands, manual = [], []
     for i, p in enumerate(files, 1):
-        name = p.name
+        name = redact(p.name)[0]          # מערכות שכר שמות לפעמים את ת"ז בשם הקובץ
         if p.suffix.lower() != ".pdf":
             manual.append({"file": name, "why": "תמונה ולא PDF. את המספרים מקלידים ידנית (ראו SKILL.md)."})
             continue
@@ -175,6 +191,8 @@ def cmd_check(a):
                 errs.append(f"{tag}: המס ({tax:,.0f}) יותר מחצי מההכנסה ({inc:,.0f}). כנראה שדה לא נכון")
             if inc > 650000:
                 warns.append(f"{tag}: הכנסה גבוהה מאוד. ייתכן שחלה חובת דוח שנתי, וזו כבר לא בקשה מקוצרת")
+        if f.get("severance"):
+            warns.append(f"{tag}: בטופס יש פיצויים או מענק חייב במס (שדה 258/272). השנה הזו תסומן 'לבדוק עם איש מקצוע' ולא תיכנס לסכום")
         p = f.get("pension")
         if isinstance(p, (int, float)) and isinstance(inc, (int, float)) and inc and p > 0.12 * inc:
             warns.append(f"{tag}: ההפקדה לפנסיה ({p:,.0f}) גבוהה מ-12% מההכנסה. לוודא שזה שדה 086 או 045 ולא הפקדת המעסיק")
@@ -313,6 +331,13 @@ def year_calc(year, forms, profile):
     high = max(0, math.floor(refund / 10) * 10)
     low = max(0, math.floor(refund * (1 - C["safety_margin"]) / 100) * 100)
     status = "promising" if refund >= C["worth_filing"] else ("small" if refund > 0 else ("owe" if refund < -C["worth_filing"] else "none"))
+    complex_why = []
+    if any(f.get("severance") for f in forms):
+        complex_why.append("בטופס יש פיצויים או מענק חייב במס, והמס עליהם כלול במס שנוכה")
+    if year in [int(v) for v in profile.get("complex_years", [])]:
+        complex_why.append("הייתה בשנה הזו הכנסה שלא מהמשכורת (עסק, שכירות, חו\"ל, פנסיה או מענק)")
+    if complex_why and status in ("promising", "small"):
+        status = "check"
     docs = [f"טופס 106 מ{f.get('payer') or 'המעסיק'}" for f in payers]
     if any(f.get("source") == "btl" for f in forms):
         docs.append("אישור שנתי למס הכנסה מביטוח לאומי")
@@ -334,7 +359,7 @@ def year_calc(year, forms, profile):
         "payers": [{"name": f.get("payer") or ("ביטוח לאומי" if f.get("source") == "btl" else "מעסיק"),
                     "source": f.get("source", "106"), "months": f.get("months"),
                     "income": round(f["income"]), "tax": round(f["tax"])} for f in forms],
-        "reasons": reasons, "docs": docs,
+        "reasons": reasons, "docs": docs, "complex": complex_why,
         "notes": ([] if R["pension_verified"] else ["תקרת ההפקדה לפנסיה בשנה הזו לא אומתה במקור רשמי; נבחר הערך השמרני"]),
     }
 
@@ -357,6 +382,20 @@ def cmd_estimate(a):
     for f in forms:
         by.setdefault(int(f["year"]), []).append(f)
     win = window()
+    skipped = sorted(y for y in by if str(y) not in RULES["years"])
+    if skipped:
+        print(f"! לשנים {', '.join(map(str, skipped))} אין עדיין ערכי מס בכלי, ולכן הן לא נבדקו")
+    confirmed = {int(v) for v in profile.get("full_year_confirmed", [])}
+    partial = []
+    for y, fs in sorted(by.items()):
+        ms = [f.get("months") for f in fs if f.get("source", "106") == "106"]
+        if str(y) in RULES["years"] and ms and all(ms) and sum(ms) < 12 and y not in confirmed:
+            partial.append(f"{y} ({sum(ms)} חודשים)")
+    if partial:
+        print("✗ הטפסים לא מכסים שנה שלמה: " + ", ".join(partial) + ".\n"
+              "  טופס חסר של מעסיק נוסף נראה כמו החזר גדול שלא קיים. שאל: \"בשנה הזו עבדת רק אצל מי שיש לך טופס ממנו, "
+              "ולא קיבלת דמי אבטלה, לידה או מילואים?\" אם כן, הוסף את השנה ל-full_year_confirmed ב-profile.json. אם לא, בקש את הטופס החסר.")
+        return 1
     years = [year_calc(y, by[y], profile) for y in sorted(by) if str(y) in RULES["years"]]
     for y in years:
         y["in_window"] = y["year"] in win
@@ -380,7 +419,7 @@ def cmd_estimate(a):
     for y in years:
         print(f"{y['year']}  {y['income']:>9,}  {y['withheld']:>8,}  {y['should_pay']:>8,}  {y['refund']:>7,}  "
               + {"promising": f"{y['low']:,}-{y['high']:,} ₪", "small": "קטן, כנראה לא שווה", "none": "לא נראה החזר",
-                 "owe": "זהירות: אולי חוב, לא להגיש בלי בדיקה"}[y["status"]]
+                 "owe": "זהירות: אולי חוב, לא להגיש בלי בדיקה", "check": "לבדוק עם איש מקצוע, לא נכלל בסכום"}[y["status"]]
               + ("" if y["in_window"] else "  (מחוץ לחלון שש השנים)"))
     print(f"\nסך הכול בשנים המבטיחות: {res['total_low']:,}-{res['total_high']:,} ₪ ({', '.join(map(str, res['promising'])) or 'אין'})")
     if missing:
@@ -404,7 +443,7 @@ def cmd_report(a):
     if a.fonts_css:
         fonts = Path(a.fonts_css).read_text(encoding="utf-8")
     html = (tpl.replace("/*FONTS*/", fonts)
-               .replace("/*DATA*/null", json.dumps(res, ensure_ascii=False))
+               .replace("/*DATA*/null", json.dumps(res, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
                .replace("/*MODE*/'report'", "'studio'" if a.studio else "'report'"))
     out = Path(a.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)

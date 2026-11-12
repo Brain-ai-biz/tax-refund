@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any, Union
 
 from ._base import FloatObject, NumberObject
@@ -17,11 +18,9 @@ class RectangleObject(ArrayObject):
     * :attr:`trimbox <pypdf._page.PageObject.trimbox>`
     """
 
-    def __init__(
-        self, arr: Union["RectangleObject", tuple[float, float, float, float]]
-    ) -> None:
-        # must have four points
-        assert len(arr) == 4
+    def __init__(self, arr: Sequence[Any]) -> None:
+        if (length := len(arr)) != 4:
+            raise ValueError(f"Expected four values for a rectangle, got {length}: {arr}")
         # automatically convert arr[x] into NumberObject(arr[x]) if necessary
         ArrayObject.__init__(self, [self._ensure_is_number(x) for x in arr])
 

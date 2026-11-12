@@ -1,4 +1,5 @@
 import codecs
+from dataclasses import dataclass
 from typing import Union
 
 from .._codecs import _pdfdoc_encoding
@@ -13,10 +14,10 @@ def hex_to_rgb(value: str) -> tuple[float, float, float]:
 
 def read_hex_string_from_stream(
     stream: StreamType,
-    forced_encoding: Union[None, str, list[str], dict[int, str]] = None,
+    forced_encoding: Union[str, list[str], dict[int, str], None] = None,
 ) -> Union["TextStringObject", "ByteStringObject"]:
     stream.read(1)
-    arr = []
+    arr = bytearray()
     x = b""
     while True:
         tok = read_non_whitespace(stream)
@@ -65,7 +66,7 @@ __BACKSLASH_CODE__ = 92
 
 def read_string_from_stream(
     stream: StreamType,
-    forced_encoding: Union[None, str, list[str], dict[int, str]] = None,
+    forced_encoding: Union[str, list[str], dict[int, str], None] = None,
 ) -> Union["TextStringObject", "ByteStringObject"]:
     tok = stream.read(1)
     parens = 1
@@ -129,7 +130,7 @@ def read_string_from_stream(
 
 def create_string_object(
     string: Union[str, bytes],
-    forced_encoding: Union[None, str, list[str], dict[int, str]] = None,
+    forced_encoding: Union[str, list[str], dict[int, str], None] = None,
 ) -> Union[TextStringObject, ByteStringObject]:
     """
     Create a ByteStringObject or a TextStringObject from a string to represent the string.
@@ -149,13 +150,23 @@ def create_string_object(
         return TextStringObject(string)
     if isinstance(string, bytes):
         if isinstance(forced_encoding, (list, dict)):
-            out = ""
+            out = []
+
+            if isinstance(forced_encoding, list):
+                list_length = len(forced_encoding)
+            else:
+                list_length = None
+
             for x in string:
-                try:
-                    out += forced_encoding[x]
-                except Exception:
-                    out += bytes((x,)).decode("charmap")
-            obj = TextStringObject(out)
+                if (
+                        (list_length is not None and x < list_length) or
+                        (list_length is None and x in forced_encoding)
+                ):
+                    value = forced_encoding[x]
+                else:
+                    value = bytes((x,)).decode("charmap")
+                out.append(value)
+            obj = TextStringObject("".join(out))
             obj._original_bytes = string
             return obj
         if isinstance(forced_encoding, str):
@@ -190,13 +201,13 @@ def create_string_object(
             # possible is to try.
             # Some strings are strings, some are just byte arrays.
             retval = TextStringObject(decode_pdfdocencoding(string))
-            retval._original_bytes = string
-            retval.autodetect_pdfdocencoding = True
-            return retval
         except UnicodeDecodeError:
             return ByteStringObject(string)
-    else:
-        raise TypeError("create_string_object should have str or unicode arg")
+
+        retval._original_bytes = string
+        retval.autodetect_pdfdocencoding = True
+        return retval
+    raise TypeError("create_string_object should have str or unicode arg")
 
 
 def decode_pdfdocencoding(byte_array: bytes) -> str:
@@ -213,3 +224,14 @@ def decode_pdfdocencoding(byte_array: bytes) -> str:
             )
         retval += c
     return retval
+
+
+@dataclass
+class StreamParsingBudget:
+    """
+    Shared, mutable budget for limiting parsing work.
+
+    Pass the same instance to recursive parsing calls to enforce a
+    cumulative budget across nested arrays and dictionaries.
+    """
+    remaining_budget: int

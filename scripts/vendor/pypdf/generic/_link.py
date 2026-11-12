@@ -51,11 +51,30 @@ class NamedReferenceLink:
         destination = self._source_pdf.named_destinations.get(str(self._reference))
         return destination.page if destination else None
 
-    def patch_reference(self, target_pdf: "PdfWriter", new_page: IndirectObject) -> None:
-        """target_pdf: PdfWriter which the new link went into"""
+    def patch_reference(
+        self,
+        target_pdf: "PdfWriter",
+        new_page: IndirectObject,
+        *,
+        known_names: Optional[set[str]] = None,
+    ) -> None:
+        """
+        Add the named destination of the link to the new page, unless it exists.
+
+        Args:
+            target_pdf: PdfWriter which the new link went into.
+            new_page: IndirectObject representing the new page in the target PDF.
+            known_names: Names of the named destinations of target_pdf, kept up to
+                date by this method. Collecting them from target_pdf is expensive,
+                thus callers patching many links should pass them.
+        """
+        name = str(self._reference)
+        if known_names is None:
+            known_names = set(target_pdf.named_destinations)
         # point named destination in new PDF to the new page
-        if str(self._reference) not in target_pdf.named_destinations:
-            target_pdf.add_named_destination(str(self._reference), new_page.page_number)
+        if name not in known_names:
+            target_pdf.add_named_destination(name, new_page.page_number)
+            known_names.add(name)
 
 
 class DirectReferenceLink:
@@ -65,7 +84,9 @@ class DirectReferenceLink:
         """reference: an ArrayObject whose first element is the Page indirect object"""
         self._reference = reference
 
-    def find_referenced_page(self) -> IndirectObject:
+    def find_referenced_page(self) -> Union[IndirectObject, None]:
+        if not self._reference:
+            return None
         return cast(IndirectObject, self._reference[0])
 
     def patch_reference(self, target_pdf: "PdfWriter", new_page: IndirectObject) -> None:

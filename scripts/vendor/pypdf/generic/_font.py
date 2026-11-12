@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pypdf.generic import (
     ArrayObject,
@@ -16,26 +17,35 @@ from pypdf.generic import (
     TextStringObject,
 )
 
-from ._cmap import get_encoding
-from ._codecs.adobe_glyphs import adobe_glyphs
-from ._utils import logger_warning
-from .constants import FontFlags
-from .errors import PdfReadError
+from .._cmap import get_encoding
+from .._codecs import encoding_dict_from_named_encoding
+from .._codecs.adobe_glyphs import adobe_glyphs
+from .._utils import logger_warning
+from ..constants import FontFlags
+from ..errors import LimitReachedError, PdfReadError
 
 if TYPE_CHECKING:
-    from io import BytesIO
-
     from fontTools.ttLib.tables._h_e_a_d import table__h_e_a_d
     from fontTools.ttLib.tables._p_o_s_t import table__p_o_s_t
+    from fontTools.ttLib.tables.DefaultTable import DefaultTable
     from fontTools.ttLib.tables.O_S_2f_2 import table_O_S_2f_2
 
-    from ._writer import PdfWriter
+    from .._writer import PdfWriter
 
 try:
+    from io import BytesIO
+
     from fontTools.ttLib import TTFont
     HAS_FONTTOOLS = True
 except ImportError:
     HAS_FONTTOOLS = False
+
+
+# Limits.
+MAX_CID_WIDTH_ENTRY_COUNT = 65_536
+MAX_WIDTH_ENTRY_COUNT = 100_000
+# For a simple font, character codes are one-byte values, 0-255, so /Widths can have at most 256 meaningful entries.
+MAX_SIMPLE_FONT_CHARACTER_CODE = 255
 
 
 # Some constants from truetype font tables that we use:
@@ -49,6 +59,10 @@ OS2_SFAMILYSCLASS_SCRIPTS = 10
 OS2_SFAMILYSCLASS_SYMBOLIC = 12
 
 
+# Groups of CMap mappings cannot exceed 100 entries (Adobe CMap and CIDFont Files Specification 1.0, p. 49).
+CMAP_MAX_ENTRIES_PER_GROUP = 100
+
+
 @dataclass(frozen=True)
 class FontDescriptor:
     """
@@ -58,6 +72,8 @@ class FontDescriptor:
     The defaults are derived from the mean values of the 14 core fonts, rounded
     to 100.
     """
+
+    _DEFAULT_BBOX: ClassVar[tuple[float, float, float, float]] = (-100.0, -200.0, 1000.0, 900.0)
 
     name: str = "Unknown"
     family: str = "Unknown"
@@ -69,7 +85,7 @@ class FontDescriptor:
     x_height: float = 500.0
     italic_angle: float = 0.0  # Non-italic
     flags: int = 32  # Non-serif, non-symbolic, not fixed width
-    bbox: tuple[float, float, float, float] = field(default_factory=lambda: (-100.0, -200.0, 1000.0, 900.0))
+    bbox: tuple[float, float, float, float] = _DEFAULT_BBOX
     font_file: StreamObject | None = None
 
     def as_font_descriptor_resource(self) -> DictionaryObject:
@@ -95,7 +111,7 @@ class FontDescriptor:
 @dataclass(frozen=True)
 class CoreFontMetrics:
     font_descriptor: FontDescriptor
-    character_widths: dict[str, int]
+    character_widths: dict[str, float]
 
 
 @dataclass
@@ -105,16 +121,16 @@ class Font:
     text appearance streams.
 
     Attributes:
-        name: Font name, derived from font["/BaseFont"]
+        name: Font name, derived from ``font["/BaseFont"]``
         character_map: The font's character map
-        encoding: Font encoding
+        encoding: Font encoding. Must be a dict for a simple font, and string otherwise.
         sub_type: The font type, such as Type1, TrueType, or Type3.
         font_descriptor: Font metrics, including a mapping of characters to widths
         character_widths: A mapping of characters to widths
         space_width: The width of a space, or an approximation
         interpretable: Default True. If False, the font glyphs cannot
             be translated to characters, e.g. Type3 fonts that do not define
-            a '/ToUnicode' mapping.
+            a ``/ToUnicode`` mapping.
 
     """
 
@@ -123,7 +139,7 @@ class Font:
     character_map: dict[Any, Any] = field(default_factory=dict)
     sub_type: str = "Unknown"
     font_descriptor: FontDescriptor = field(default_factory=FontDescriptor)
-    character_widths: dict[str, int] = field(default_factory=lambda: {"default": 500})
+    character_widths: dict[str, float] = field(default_factory=lambda: {"default": 500})
     space_width: float | int = 250
     space_char: str = " "
     interpretable: bool = True
@@ -133,18 +149,61 @@ class Font:
         pdf_font_dict: DictionaryObject,
         char_map: dict[Any, Any],
         encoding: str | dict[int, str],
-        current_widths: dict[str, int]
+        current_widths: dict[str, float]
     ) -> None:
         """Parses a TrueType or Type1 font's /Widths array from a font dictionary and updates character widths"""
-        widths_array = cast(ArrayObject, pdf_font_dict["/Widths"])
+        widths_array = pdf_font_dict["/Widths"].get_object()
+        if not isinstance(widths_array, ArrayObject):
+            logger_warning(
+                "Expected an array for /Widths, got %(widths_array)s. Ignoring it.",
+                source=__name__,
+                widths_array=widths_array,
+            )
+            return
+        Font.__check_entry_count(
+            len(widths_array), MAX_SIMPLE_FONT_CHARACTER_CODE + 1
+        )
         first_char = pdf_font_dict.get("/FirstChar", 0)
-        for idx, width in enumerate(widths_array):
-            current_widths[chr(idx + first_char)] = int(width)
+        if not isinstance(first_char, (int, float)):
+            logger_warning(
+                "Ignoring invalid /FirstChar %(code)s.", source=__name__, code=first_char
+            )
+            return
+        first_char = int(first_char)
+        if first_char < 0:
+            logger_warning(
+                "Ignoring invalid /FirstChar %(code)d < 0.", source=__name__, code=first_char
+            )
+            return
+        for character_code, width in enumerate(widths_array, start=first_char):
+            if character_code > MAX_SIMPLE_FONT_CHARACTER_CODE:
+                logger_warning(
+                    "Ignoring invalid character codes > %(limit)d (starting at %(code)d).",
+                    source=__name__,
+                    code=character_code,
+                    limit=MAX_SIMPLE_FONT_CHARACTER_CODE
+                )
+                break
+            current_widths[chr(character_code)] = int(width)
 
     @staticmethod
-    def _collect_cid_character_widths(
-        d_font: DictionaryObject, char_map: dict[Any, Any], current_widths: dict[str, int]
-    ) -> None:
+    def __check_range_length(start: int, end: int) -> None:
+        if end < start:
+            raise LimitReachedError(
+                f"Invalid CID width range: {start}..{end}."
+            )
+
+        count = end - start
+        if count > MAX_CID_WIDTH_ENTRY_COUNT:
+            raise LimitReachedError(f"CID width range too large: {count} > {MAX_CID_WIDTH_ENTRY_COUNT}.")
+
+    @staticmethod
+    def __check_entry_count(count: int, limit: int = MAX_WIDTH_ENTRY_COUNT) -> None:
+        if count > limit:
+            raise LimitReachedError(f"Too many character widths: {count} > {limit}.")
+
+    @staticmethod
+    def _collect_cid_character_widths(d_font: DictionaryObject, current_widths: dict[str, float]) -> None:
         """Parses the /W array from a DescendantFont dictionary and updates character widths."""
         # /W width definitions have two valid formats which can be mixed and matched:
         #   (1) A character start index followed by a list of widths, e.g.
@@ -152,12 +211,14 @@ class Font:
         #   (2) A character start index, a character stop index, and a width, e.g.
         #       `45 65 500` applies width 500 to characters 45-65.
         skip_count = 0
-        _w = d_font.get("/W", [])
+        entry_count = 0
+        _w = d_font.get("/W", ArrayObject()).get_object()
+        _w_length = len(_w)
         for idx, w_entry in enumerate(_w):
-            w_entry = w_entry.get_object()
             if skip_count:
                 skip_count -= 1
                 continue
+            w_entry = w_entry.get_object()
             if not isinstance(w_entry, (int, float)):
                 # We should never get here due to skip_count above. But
                 # sometimes we do.
@@ -168,37 +229,42 @@ class Font:
                 )
                 continue
             # check for format (1): `int [int int int int ...]`
-            w_next_entry = _w[idx + 1].get_object()
+            w_next_entry = _w[idx + 1].get_object() if idx + 1 < _w_length else None
             if isinstance(w_next_entry, Sequence):
-                start_idx, width_list = w_entry, w_next_entry
+                start_idx, width_list = int(w_entry), w_next_entry
+                stop_idx = start_idx + len(width_list)
+                Font.__check_range_length(start_idx, stop_idx)
+                entry_count += (stop_idx - start_idx)
+                Font.__check_entry_count(entry_count)
                 current_widths.update(
                     {
-                        chr(_cidx): _width
+                        chr(_cidx): _width.get_object()
                         for _cidx, _width in zip(
-                            range(
-                                cast(int, start_idx),
-                                cast(int, start_idx) + len(width_list),
-                                1,
-                            ),
+                            range(start_idx, stop_idx, 1),
                             width_list,
                         )
                     }
                 )
                 skip_count = 1
             # check for format (2): `int int int`
-            elif isinstance(w_next_entry, (int, float)) and isinstance(
-                _w[idx + 2].get_object(), (int, float)
+            elif (
+                isinstance(w_next_entry, (int, float))
+                and idx + 2 < _w_length
+                and isinstance(_w[idx + 2].get_object(), (int, float))
             ):
                 start_idx, stop_idx, const_width = (
-                    w_entry,
-                    w_next_entry,
+                    int(w_entry),
+                    int(w_next_entry),
                     _w[idx + 2].get_object(),
                 )
+                Font.__check_range_length(start_idx, stop_idx + 1)
+                entry_count += (stop_idx - start_idx + 1)
+                Font.__check_entry_count(entry_count)
                 current_widths.update(
                     {
                         chr(_cidx): const_width
                         for _cidx in range(
-                            cast(int, start_idx), cast(int, stop_idx + 1), 1
+                            start_idx, stop_idx + 1, 1
                         )
                     }
                 )
@@ -218,19 +284,19 @@ class Font:
         character_map: dict[Any, Any],
     ) -> str:
         space_char = " "
+        for glyph_id, char_str in character_map.items():
+            if char_str == space_char:
+                return str(glyph_id)
+
         if isinstance(encoding, dict):
             for char_code, char_str in encoding.items():
                 if char_str == space_char:
                     return chr(char_code)
 
-        for glyph_id, char_str in character_map.items():
-            if char_str == space_char:
-                return str(glyph_id)
-
         return space_char
 
     @staticmethod
-    def _add_default_width(current_widths: dict[str, int], flags: int, space_char: str) -> None:
+    def _add_default_width(current_widths: dict[str, float], flags: int, space_char: str) -> None:
         if not current_widths:
             current_widths["default"] = 500
             return
@@ -250,10 +316,10 @@ class Font:
 
     @staticmethod
     def _add_space_width(
-        character_widths: dict[str, int],
+        character_widths: dict[str, float],
         flags: int,
         space_char: str
-    ) -> int:
+    ) -> float:
         space_width = character_widths.get(space_char, 0)
         if space_width != 0:
             return space_width
@@ -262,6 +328,28 @@ class Font:
             return character_widths["default"]
 
         return character_widths["default"] // 2
+
+    @staticmethod
+    def _parse_bbox(raw_bbox: Any) -> tuple[float, float, float, float] | None:
+        """
+        Convert a raw /FontBBox value into four floats.
+
+        Args:
+            raw_bbox: The raw /FontBBox value read from the PDF.
+
+        Returns:
+            The four bounding box values, or ``None`` when the value is not
+            a sequence of exactly four numbers, so that a malformed entry
+            falls back to the default bounding box rather than raising.
+
+        """
+        try:
+            bbox = [float(value) for value in raw_bbox]
+        except (TypeError, ValueError):
+            return None
+        if len(bbox) != 4:
+            return None
+        return bbox[0], bbox[1], bbox[2], bbox[3]
 
     @staticmethod
     def _parse_font_descriptor(font_descriptor_obj: DictionaryObject) -> dict[str, Any]:
@@ -280,11 +368,13 @@ class Font:
         ]:
             if source_key in font_descriptor_obj:
                 font_descriptor_kwargs[target_key] = font_descriptor_obj[source_key]
-        # Handle missing bbox gracefully - PDFs may have fonts without valid bounding boxes
+        # Handle missing or malformed bbox gracefully - PDFs may have fonts without valid bounding boxes
         if "bbox" in font_descriptor_kwargs:
-            bbox_tuple = tuple(map(float, font_descriptor_kwargs["bbox"]))
-            assert len(bbox_tuple) == 4, bbox_tuple
-            font_descriptor_kwargs["bbox"] = bbox_tuple
+            bbox = Font._parse_bbox(font_descriptor_kwargs["bbox"])
+            if bbox is None:
+                del font_descriptor_kwargs["bbox"]
+            else:
+                font_descriptor_kwargs["bbox"] = bbox
 
         # Find the binary stream for this font if there is one
         for source_key in ["/FontFile", "/FontFile2", "/FontFile3"]:
@@ -295,13 +385,13 @@ class Font:
                 try:
                     font_file = font_descriptor_obj[source_key].get_object()
                     font_descriptor_kwargs["font_file"] = font_file
-                except PdfReadError as e:
+                except PdfReadError as exception:
                     logger_warning(
                         "Failed to get %(source_key)r in %(font_descriptor_obj)s: %(error)s",
                         source=__name__,
                         source_key=source_key,
                         font_descriptor_obj=font_descriptor_obj,
-                        error=e,
+                        error=exception,
                     )
         return font_descriptor_kwargs
 
@@ -312,12 +402,16 @@ class Font:
     ) -> Font:
         from pypdf._codecs.core_font_metrics import CORE_FONT_METRICS  # noqa: PLC0415
 
-        # Can collect base_font, name and encoding directly from font resource
-        name = pdf_font_dict.get("/BaseFont", "Unknown").removeprefix("/")
-        sub_type = pdf_font_dict.get("/Subtype", "Unknown").removeprefix("/")
+        # Can collect base_font, name and encoding directly from font resource.
+        # A malformed resource may carry a non-string value here, so fall back
+        # to "Unknown" rather than failing on it.
+        base_font = pdf_font_dict.get("/BaseFont", "Unknown")
+        name = base_font.removeprefix("/") if isinstance(base_font, str) else "Unknown"
+        sub_type_value = pdf_font_dict.get("/Subtype", "Unknown")
+        sub_type = sub_type_value.removeprefix("/") if isinstance(sub_type_value, str) else "Unknown"
         encoding, character_map = get_encoding(pdf_font_dict)
         font_descriptor = None
-        character_widths: dict[str, int] = {}
+        character_widths: dict[str, float] = {}
         interpretable = True
 
         # Deal with fonts by type; Type1, TrueType and certain Type3
@@ -339,16 +433,10 @@ class Font:
 
                 elif name in CORE_FONT_METRICS:
                     font_descriptor = CORE_FONT_METRICS[name].font_descriptor
-                    if isinstance(encoding, dict):
-                        for code, character in encoding.items():
-                            # Look up the width using the glyph name from the encoding
-                            if character in CORE_FONT_METRICS[name].character_widths:
-                                character_widths[chr(code)] = CORE_FONT_METRICS[name].character_widths[character]
-                    else:
-                        for code in range(256):
-                            character = chr(code)
-                            if character in CORE_FONT_METRICS[name].character_widths:
-                                character_widths[character] = CORE_FONT_METRICS[name].character_widths[character]
+                    for code, character in cast(dict[int, str], encoding).items():
+                        # Look up the width using the glyph name from the encoding
+                        if character in CORE_FONT_METRICS[name].character_widths:
+                            character_widths[chr(code)] = CORE_FONT_METRICS[name].character_widths[character]
                 if "/FontDescriptor" in pdf_font_dict:
                     font_descriptor_obj = pdf_font_dict.get("/FontDescriptor", DictionaryObject()).get_object()
                     if "/MissingWidth" in font_descriptor_obj:
@@ -356,23 +444,28 @@ class Font:
                     font_descriptor = FontDescriptor(**cls._parse_font_descriptor(font_descriptor_obj))
                 elif "/FontBBox" in pdf_font_dict:
                     # For Type3 without Font Descriptor but with FontBBox, see Table 110 in the PDF specification 2.0
-                    bbox_tuple = tuple(map(float, cast(ArrayObject, pdf_font_dict["/FontBBox"])))
-                    assert len(bbox_tuple) == 4, bbox_tuple
-                    font_descriptor = FontDescriptor(name=name, bbox=bbox_tuple)
+                    font_descriptor_kwargs: dict[str, Any] = {"name": name}
+                    bbox = cls._parse_bbox(pdf_font_dict["/FontBBox"])
+                    if bbox is not None:
+                        font_descriptor_kwargs["bbox"] = bbox
+                    font_descriptor = FontDescriptor(**font_descriptor_kwargs)
 
         else:
             # Composite font or CID font - CID fonts have a /W array mapping character codes
-            # to widths stashed in /DescendantFonts. No need to test for /DescendantFonts though,
-            # because all other fonts have already been dealt with.
-            d_font: DictionaryObject
-            for d_font_idx, d_font in enumerate(
-                cast(ArrayObject, pdf_font_dict["/DescendantFonts"])
-            ):
-                d_font = cast(DictionaryObject, d_font.get_object())
-                cast(ArrayObject, pdf_font_dict["/DescendantFonts"])[d_font_idx] = d_font
-                cls._collect_cid_character_widths(
-                    d_font, character_map, character_widths
+            # to widths stashed in /DescendantFonts.
+            descendant_fonts = pdf_font_dict.get("/DescendantFonts", ArrayObject()).get_object()
+            if not isinstance(descendant_fonts, ArrayObject):
+                logger_warning(
+                    "Expected an array for /DescendantFonts, got %(descendant_fonts)s. Ignoring it.",
+                    source=__name__,
+                    descendant_fonts=descendant_fonts,
                 )
+                descendant_fonts = ArrayObject()
+            d_font: DictionaryObject
+            for d_font_idx, d_font in enumerate(descendant_fonts):
+                d_font = cast(DictionaryObject, d_font.get_object())
+                descendant_fonts[d_font_idx] = d_font
+                cls._collect_cid_character_widths(d_font=d_font, current_widths=character_widths)
                 if "/DW" in d_font:
                     character_widths["default"] = cast(int, d_font["/DW"].get_object())
                 font_descriptor_obj = d_font.get("/FontDescriptor", DictionaryObject()).get_object()
@@ -399,49 +492,89 @@ class Font:
         )
 
     @staticmethod
-    def _font_flags_from_truetype_font_tables(
-            header: table__h_e_a_d,
-            postscript: table__p_o_s_t,
-            os2: table_O_S_2f_2
+    def _load_fonttools_table(table_name: str, is_critical: bool, tt_font_object: TTFont) -> DefaultTable | None:
+        """Once we have a TTFont object, we can try to get the necessary font tables from
+        which we collect the information to instantiate a Font class. However, some of
+        these tables might be missing from the embedded font file, and others might be
+        corrupt in some form and then throw a struct.error on decompilation. We decompile
+        all tables we need using this method to guard against fontTools exceptions.
+
+        This method distinguishes between optional tables and critical tables without which
+        we cannot instantiate a Font. For critical tables, raises PdfReadError if missing
+        OR if binary data is corrupt. For optional tables, it logs warnings instead.
+        """
+        try:
+            # tt_font.get() automatically triggers table.decompile() under the hood
+            table = tt_font_object.get(table_name)
+            if table is None:
+                if is_critical:
+                    raise PdfReadError(f"Font file does not have a {table_name!r} table")
+                logger_warning(
+                    "Optional font table %(table_name)r is missing from font file",
+                    source=__name__,
+                    table_name=table_name
+                )
+                return None
+        except Exception as exception:
+            if is_critical:
+                raise PdfReadError(
+                    f"Font table {table_name!r} is corrupt or truncated: {exception}"
+                ) from exception
+            logger_warning(
+                "Optional font table %(table_name)r is corrupt and will be ignored: %(exception)s",
+                source=__name__,
+                table_name=table_name,
+                exception=exception
+            )
+            return None
+        return table
+
+    @staticmethod
+    def _get_font_flags_from_truetype_font_tables(
+            header_table: table__h_e_a_d,
+            postscript_table: table__p_o_s_t,
+            os2_table: table_O_S_2f_2
         ) -> int:
         # Get the font flags
-        if os2:
-            panose = os2.panose
+        if os2_table:
+            panose = os2_table.panose
             # sFamilyClass is a two-byte field. The high byte describes the family class, whereas the low
             # byte only describes the subclass. We only need the high byte, hence the bit shift below:
-            family_class = os2.sFamilyClass >> 8
+            family_class = os2_table.sFamilyClass >> 8
         flags: int = 0
 
         # ITALIC
-        if header.macStyle & HEADER_MACSTYLE_ITALIC or (os2 and os2.fsSelection & OS2_FSSELECTION_ITALIC):
+        if header_table.macStyle & HEADER_MACSTYLE_ITALIC or (
+            os2_table and os2_table.fsSelection & OS2_FSSELECTION_ITALIC
+        ):
             flags |= FontFlags.ITALIC
-        if postscript:
-            italic_angle = postscript.italicAngle
+        if postscript_table:
+            italic_angle = postscript_table.italicAngle
             if italic_angle != 0.0:
                 flags |= FontFlags.ITALIC
 
         # FIXED_PITCH
         if (
-            (os2 and panose.bProportion == OS2_PANOSE_BPROPORTION_MONOSPACED) or
-            (postscript and postscript.isFixedPitch > 0)  # Actually 1, but originally (older versions of the TTF
-        ):                                                # specification) any non-zero value signified monospace.
+            (os2_table and panose.bProportion == OS2_PANOSE_BPROPORTION_MONOSPACED) or
+            (postscript_table and postscript_table.isFixedPitch > 0)  # Actually 1, but originally (older TTF spec.
+        ):                                                            # version) any non-zero value signified monospace.
             flags |= FontFlags.FIXED_PITCH
 
         # SCRIPT
-        if os2 and (
+        if os2_table and (
             family_class == OS2_SFAMILYSCLASS_SCRIPTS or panose.bFamilyType == OS2_PANOSE_BFAMILYTYPE_SCRIPT
         ):
             flags |= FontFlags.SCRIPT
 
         # SERIF
-        if os2 and (
+        if os2_table and (
             2 <= panose.bSerifStyle <= 10
             or 1 <= family_class <= 5 or family_class == 7  # 6 is reserved, all 8 and above are not serif
         ):
             flags |= FontFlags.SERIF
 
         # SYMBOLIC
-        if os2 and (
+        if os2_table and (
             family_class == OS2_SFAMILYSCLASS_SYMBOLIC or
             panose.bFamilyType in {OS2_PANOSE_BFAMILYTYPE_DECORATIVE, OS2_PANOSE_BFAMILYTYPE_PICTORIAL}
         ):
@@ -455,46 +588,78 @@ class Font:
     def from_truetype_font_file(cls, font_file: BytesIO) -> Font:
         if not HAS_FONTTOOLS:
             raise ImportError("The 'fontTools' library is required to use 'from_truetype_font_file'")
-        with TTFont(font_file) as tt_font_object:
+        try:
+            tt_font_object = TTFont(font_file)
+        except Exception as exception:
+            raise PdfReadError(f"Could not open font file: {exception}") from exception
+        with tt_font_object:
             # See Chapter 6 of the TrueType reference manual for the definition of the head, OS/2 and post tables:
             # https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6head.html
             # https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6OS2.html
             # https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6post.html
-            header = tt_font_object["head"]
-            horizontal_header = tt_font_object["hhea"]
-            metrics = tt_font_object["hmtx"].metrics
 
-            # Collect additional font tables to derive font information
-            postscript = tt_font_object.get("post", None)
-            os2 = tt_font_object.get("OS/2", None)
+            # Collect all font tables.
+            (
+                cmap_table,
+                header_table,
+                metrics_table,
+                horizontal_header_table,
+                name_table,
+                os2_table,
+                postscript_table
+            ) = (
+                cls._load_fonttools_table(
+                    table_name=table_name,
+                    is_critical=table_name in {"head", "hmtx", "cmap"},
+                    tt_font_object=tt_font_object
+                )
+                for table_name in ("cmap", "head", "hmtx", "hhea", "name", "OS/2", "post")
+            )
+
+            if TYPE_CHECKING:
+                assert header_table is not None
+                assert metrics_table is not None
+                assert cmap_table is not None
 
             # Get the scaling factor to convert font file's units per em to PDF's 1000 units per em
-            units_per_em = header.unitsPerEm
+            if (units_per_em := header_table.unitsPerEm) <= 0:
+                raise PdfReadError(f"Font file has an invalid unitsPerEm of {units_per_em}")
             scale_factor = 1000.0 / units_per_em
 
             # Get the font descriptor
             font_descriptor_kwargs: dict[Any, Any] = {}
-            names = tt_font_object.get("name", None)
-            if names:
-                font_descriptor_kwargs["name"] = names.getBestFullName()
-                font_descriptor_kwargs["family"] = names.getBestFamilyName()
-                font_descriptor_kwargs["weight"] = names.getBestSubFamilyName()
-            font_descriptor_kwargs["ascent"] = int(round(horizontal_header.ascent * scale_factor, 0))
-            font_descriptor_kwargs["descent"] = int(round(horizontal_header.descent * scale_factor, 0))
-            if os2:
+
+            if name_table:
+                for name, getter in (
+                    ("name", name_table.getBestFullName),
+                    ("family", name_table.getBestFamilyName),
+                    ("weight", name_table.getBestSubFamilyName)
+                ):
+                    if (value := getter()) is not None:
+                        font_descriptor_kwargs[name] = value
+
+            if horizontal_header_table:
+                font_descriptor_kwargs["ascent"] = int(round(horizontal_header_table.ascent * scale_factor, 0))
+                font_descriptor_kwargs["descent"] = int(round(horizontal_header_table.descent * scale_factor, 0))
+
+            if os2_table:
                 try:
-                    font_descriptor_kwargs["cap_height"] = int(round(os2.sCapHeight * scale_factor, 0))
-                    font_descriptor_kwargs["x_height"] = int(round(os2.sxHeight * scale_factor, 0))
+                    font_descriptor_kwargs["cap_height"] = int(round(os2_table.sCapHeight * scale_factor, 0))
+                    font_descriptor_kwargs["x_height"] = int(round(os2_table.sxHeight * scale_factor, 0))
                 except AttributeError:
                     pass
 
-            font_descriptor_kwargs["flags"] = cls._font_flags_from_truetype_font_tables(header, postscript, os2)
+            font_descriptor_kwargs["flags"] = cls._get_font_flags_from_truetype_font_tables(
+                header_table,
+                postscript_table,
+                os2_table
+            )
 
             font_descriptor_kwargs["bbox"] = (
-                round(header.xMin * scale_factor, 0),
-                round(header.yMin * scale_factor, 0),
-                round(header.xMax * scale_factor, 0),
-                round(header.yMax * scale_factor, 0)
+                round(header_table.xMin * scale_factor, 0),
+                round(header_table.yMin * scale_factor, 0),
+                round(header_table.xMax * scale_factor, 0),
+                round(header_table.yMax * scale_factor, 0)
             )
 
             font_file_data = StreamObject()
@@ -506,28 +671,25 @@ class Font:
             font_descriptor = FontDescriptor(**font_descriptor_kwargs)
             encoding = "utf_16_be"  # Assume unicode
 
-            character_widths: dict[str, int] = {}
+            character_widths: dict[str, float] = {}
             character_map: dict[str, str] = {}
 
-            glyph_order = tt_font_object.getGlyphOrder()
             # Note that one glyph can be mapped to multiple unicode code points. However, buildReversedMin()
             # creates a dictionary mapping glyphs to the minimum Unicode codepoint.
-            tt_font_cmap_table = tt_font_object.get("cmap")
-            if tt_font_cmap_table:
-                reverse_cmap = tt_font_cmap_table.buildReversedMin()
-                for gid, glyph in enumerate(glyph_order):
-                    char_code = reverse_cmap.get(glyph)
-                    if char_code is None:
-                        continue
-                    char = chr(char_code)
-                    gid = tt_font_object.getGlyphID(glyph)
-                    # The following is to comply with how font_glyph_byte_map works in _appearance_stream.py
-                    gid_bytes = gid.to_bytes(2, "big")
-                    gid_key_string = gid_bytes.decode("utf-16-be", "surrogatepass")
-                    character_map[gid_key_string] = char
-                    character_widths[gid_key_string] = int(round(metrics[glyph][0] * scale_factor, 0))
-            else:
-                raise PdfReadError("Font file does not have a cmap table")
+            try:
+                reverse_cmap = cmap_table.buildReversedMin()
+            except AttributeError:
+                # Use buildReversed on fonttools < 4.57 and build a list of minimums from it
+                reverse_cmap = {k: min(r) for k, r in cmap_table.buildReversed().items()}
+            metrics = metrics_table.metrics
+            for gid, glyph in enumerate(tt_font_object.getGlyphOrder()):
+                # The following is to comply with how font_glyph_byte_map works in _appearance_stream.py
+                gid_key_string = gid.to_bytes(2, "big").decode("utf-16-be", "surrogatepass")
+                # Always map character width
+                character_widths[gid_key_string] = round(metrics[glyph][0] * scale_factor)
+                # Add GID to character_map when we can find it in the cmap
+                if (char_code := reverse_cmap.get(glyph)) is not None:
+                    character_map[gid_key_string] = chr(char_code)
 
             space_char = cls._get_space_char(encoding, character_map)
             cls._add_default_width(character_widths, font_descriptor_kwargs["flags"], space_char)
@@ -537,7 +699,7 @@ class Font:
 
         return cls(
             name=font_descriptor.name,
-            sub_type="TrueType",
+            sub_type="Type0",
             encoding=encoding,
             font_descriptor=font_descriptor,
             character_map=character_map,
@@ -547,6 +709,30 @@ class Font:
             interpretable=True
         )
 
+    @classmethod
+    def from_core_font_name(cls, core_font_name: str = "/Helvetica") -> Font:
+        from pypdf._codecs.core_font_metrics import CORE_FONT_METRICS  # noqa: PLC0415
+
+        font_name = core_font_name.removeprefix("/")
+        core_font_metrics = CORE_FONT_METRICS[font_name]
+        win_ansi_encoding = encoding_dict_from_named_encoding("cp1252")  # WinAnsiEncoding
+
+        font = cls(
+            name=font_name,
+            character_map={},
+            encoding=win_ansi_encoding,
+            sub_type="Type1",
+            font_descriptor=core_font_metrics.font_descriptor,
+            character_widths={
+                char: core_font_metrics.character_widths[character]
+                for code, character in win_ansi_encoding.items()
+                if (char := chr(code)) in core_font_metrics.character_widths
+            }
+        )
+        font.character_widths["default"] = core_font_metrics.character_widths["default"]
+
+        return font
+
     def _get_typographic_maps(self) -> tuple[dict[str, str], dict[str, bytes]]:
         """
         Generates maps to translate input unicode text to bytes in two steps:
@@ -554,13 +740,40 @@ class Font:
         """
         reverse_cmap = {}
         encoding_cmap = {}
+        if (
+            HAS_FONTTOOLS
+            and getattr(self.font_descriptor, "font_file", None)
+            and isinstance(self.encoding, str)
+            and (font_file_data := cast(StreamObject, self.font_descriptor.font_file).get_data()) is not None
+        ):
+            try:
+                tt_font_object = TTFont(BytesIO(font_file_data))
+            except MemoryError:  # pragma: no cover  # TODO: BLE001
+                raise
+            except Exception as exception:  # Font file data is corrupt.
+                logger_warning("Could not open font file: %(exception)s", source=__name__, exception=exception)
+            else:
+                with tt_font_object:
+                    # Read reverse_cmap and encoding_cmap from the font file if we can get a cmap
+                    tt_font_cmap_table = self._load_fonttools_table(
+                        table_name="cmap", is_critical=False, tt_font_object=tt_font_object
+                    )
+                    if tt_font_cmap_table and (best_cmap := tt_font_cmap_table.getBestCmap()):
+                        for unicode_int, glyph_name in best_cmap.items():
+                            gid = tt_font_object.getGlyphID(glyph_name)
+                            gid_key_string = gid.to_bytes(2, "big").decode("utf-16-be", "surrogatepass")
+                            unicode_char = chr(unicode_int)
+                            reverse_cmap[unicode_char] = gid_key_string
+                            encoding_cmap[gid_key_string] = gid_key_string.encode(self.encoding)
+
+                        return reverse_cmap, encoding_cmap
 
         if isinstance(self.encoding, str):
             for glyph_id, unicode_char in self.character_map.items():
                 glyph_id_str = str(glyph_id)
                 reverse_cmap[unicode_char] = glyph_id_str
                 encoding_cmap[glyph_id_str] = glyph_id_str.encode(self.encoding)
-        else:
+        else:  # Encoding is a dict, which means we are dealing with a simple font
             for character_code, unicode_char in self.encoding.items():
                 character_str = chr(character_code)
                 reverse_cmap[unicode_char] = character_str
@@ -569,32 +782,60 @@ class Font:
             unicode_to_bytes = {
                 unicode_char: bytes((character_code,)) for character_code, unicode_char in self.encoding.items()
             }
-            for glyph_id, unicode_char in self.character_map.items():  # This code is not covered nor tested
-                reverse_cmap[unicode_char] = glyph_id
-                encoding_cmap[glyph_id] = unicode_to_bytes.get(unicode_char, bytes((glyph_id,)))
+            for character_code_str, unicode_char in self.character_map.items():
+                reverse_cmap[unicode_char] = character_code_str
+                encoding_cmap[character_code_str] = unicode_to_bytes.get(
+                    unicode_char,
+                    bytes((ord(character_code_str),))
+                )
 
         return reverse_cmap, encoding_cmap
 
     def _create_widths_list_and_unicode_stream(self) -> tuple[list[PdfObject], StreamObject]:
+        from pypdf._codecs.core_font_metrics import CORE_FONT_METRICS  # noqa: PLC0415
+
         widths_list = []
         unicode_map = []
-        # In the loop, char is the decoded GID string (the reverse unicode hack)
-        # and character_map[char] is the actual character.
-        # The widths (/W) array can have two formats:
-        #    [first_cid [w1 w2 w3]] or [first last width]
-        # Here we choose the first format and simply provide one array with one width for every cid.
-        for gid_str, actual_char in self.character_map.items():
-            uni_point = ord(actual_char)
-            # Only deal with Basic Multilingual Plane characters.
-            # TODO: Add all characters. However, this requires widths reworking first.
-            if uni_point <= 0xFFFF:
-                cid = ord(gid_str)
-                cid_hex = f"{cid:04X}"
-                uni_hex = f"{uni_point:04X}"
-                unicode_map.append(f"<{cid_hex}> <{uni_hex}>")
+        bfchar_map: list[str] = []
 
-                width = self.character_widths.get(gid_str, self.character_widths["default"])
+        # Composite/CID fonts use 4-hex digits, simple fonts use 2-hex digits
+        src_hex_format = "{cid:04X}" if self.sub_type == "Type0" else "{cid:02X}"
+        codespace_min = "0000" if self.sub_type == "Type0" else "00"
+        codespace_max = "FFFF" if self.sub_type == "Type0" else "FF"
+        cmap_name = "Adobe-Identity-UCS" if self.sub_type == "Type0" else "Custom-Simple-8Bit"
+        cid_system_info = (
+            "/CIDSystemInfo <<\n/Registry (Adobe)\n/Ordering (UCS)\n/Supplement 0\n>> def\n"
+            if self.sub_type == "Type0" else ""
+        )
+
+        # If we have self.character_map then use that. Otherwise fall back to self.encoding.
+        mapping_source = (self.character_map or cast(dict[int, str], self.encoding)).items()
+
+        # In the loop, src_id is the decoded GID string (the reverse unicode hack) or the character code
+        # and actual_char is the actual character.
+        for src_id, actual_char in mapping_source:
+            # Make sure that we do not include characters such as arabic presentation form characters.
+            # Note that, in some cases, unicodedata.normalize() might split a ligature, resulting
+            # in multiple characters.
+            normalized_chars = unicodedata.normalize("NFKC", actual_char)
+            cid = ord(src_id) if isinstance(src_id, str) else src_id
+            cid_hex = src_hex_format.format(cid=cid)
+            uni_hex = normalized_chars.encode("utf-16-be").hex().upper()
+            bfchar_map.append(f"<{cid_hex}> <{uni_hex}>")
+
+            # Width mapping, but not for the 14 Adobe code fonts, which are dealt with elsewhere.
+            if self.name not in CORE_FONT_METRICS:
+                # The widths (/W) array can have two formats:
+                #    [first_cid [w1 w2 w3]] or [first last width]
+                # Here we choose the first format and simply provide one array with one width for every cid.
+                width = self.character_widths.get(cast(str, src_id), self.character_widths["default"])
                 widths_list.extend([NumberObject(cid), ArrayObject([NumberObject(width)])])
+
+        while partial_list := bfchar_map[:CMAP_MAX_ENTRIES_PER_GROUP]:
+            del bfchar_map[:CMAP_MAX_ENTRIES_PER_GROUP]
+            unicode_map.append(f"{len(partial_list)} beginbfchar")
+            unicode_map.extend(partial_list)
+            unicode_map.append("endbfchar")
 
         # Create the /ToUnicode CMap Stream
         to_unicode_stream = StreamObject()
@@ -603,13 +844,11 @@ class Font:
                 "/CIDInit /ProcSet findresource begin\n"
                 "12 dict begin\n"
                 "begincmap\n"
-                "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
-                "/CMapName /Adobe-Identity-UCS def\n"
-                "/CMapType 2 def\n"
-                "1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
-                f"{len(unicode_map)} beginbfchar\n"
+                f"{cid_system_info}"
+                f"/CMapName /{cmap_name} def\n"
+                f"/CMapType 2 def\n"
+                f"1 begincodespacerange <{codespace_min}> <{codespace_max}> endcodespacerange\n"
                 + "\n".join(unicode_map) + "\n"
-                "endbfchar\n"
                 "endcmap\n"
                 "CMapName currentdict /CMap defineresource pop\n"
                 "end end"
@@ -620,9 +859,10 @@ class Font:
 
     def as_font_resource(self) -> DictionaryObject:
         # If we have an embedded Truetype font, we assume that we need to produce a Type 2 CID font resource.
-        if self.font_descriptor.font_file and self.sub_type == "TrueType":
+        # We check that we are 16-bit encoded, that is, Type0.
+        if self.font_descriptor.font_file and self.sub_type == "Type0":
             # Begin with creating the widths array (part of the descendant font) and the unicode cmap (part
-            # of the Type 0 font obect).
+            # of the Type 0 font object).
             widths_list, to_unicode_stream = self._create_widths_list_and_unicode_stream()
 
             # Create the descendant font object
@@ -652,13 +892,36 @@ class Font:
             })
 
         # Fallback: Return a font resource for one of the 14 Adobe Core fonts.
-        return DictionaryObject({
+        win_ansi_encoding = encoding_dict_from_named_encoding("cp1252")
+        differences_list: list[NumberObject | NameObject] = []
+        reverse_adobe_glyphs = {value: key for key, value in adobe_glyphs.items()}
+        own_encoding: dict[int, str] = cast(dict[int, str], self.encoding)
+        for idx, character_code in win_ansi_encoding.items():
+            encoding_char = own_encoding.get(idx)
+            if encoding_char and encoding_char != character_code:
+                differences_list.extend([NumberObject(idx), NameObject(reverse_adobe_glyphs[encoding_char])])
+
+        if differences_list:
+            encoding: DictionaryObject | NameObject = DictionaryObject({
+                NameObject("/BaseEncoding"): NameObject("/WinAnsiEncoding"),
+                NameObject("/Differences"): ArrayObject(differences_list),
+            })
+        else:
+            encoding = NameObject("/WinAnsiEncoding")
+
+        simple_font =  DictionaryObject({
             NameObject("/Type"): NameObject("/Font"),
             NameObject("/Subtype"): NameObject("/Type1"),
             NameObject("/Name"): NameObject(f"/{self.name}"),
             NameObject("/BaseFont"): NameObject(f"/{self.name}"),
-            NameObject("/Encoding"): NameObject("/WinAnsiEncoding")
+            NameObject("/Encoding"): encoding
         })
+
+        if differences_list:
+            _, to_unicode_stream = self._create_widths_list_and_unicode_stream()
+            simple_font[NameObject("/ToUnicode")] = to_unicode_stream
+
+        return simple_font
 
     def _add_to_writer(
         self,
@@ -701,17 +964,14 @@ class Font:
 
     def can_encode(self, text: str) -> bool:
         """Check whether the font is able to encode a text string."""
-        try:
-            if self.character_map:
-                supported_chars = set(self.character_map.values())
-                return all(char in supported_chars for char in text)
-            if isinstance(self.encoding, str):
-                text.encode(self.encoding, "surrogatepass")
-            else:
-                supported_chars = set(self.encoding.values())
-                return all(char in supported_chars for char in text)
+        if self.character_map:
+            supported_chars = set(self.character_map.values())
+            return all(char in supported_chars for char in text)
 
-        except UnicodeEncodeError:
-            return False
+        if isinstance(self.encoding, dict):
+            supported_chars = set(self.encoding.values())
+            return all(char in supported_chars for char in text)
 
-        return True
+        # Not a simple font (encoding is not a dict), and missing ToUnicode cmap (no character_map).
+        # Assume we cannot use this font for text encoding.
+        return False

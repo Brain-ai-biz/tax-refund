@@ -31,6 +31,7 @@ __author_email__ = "biziqe@mathieu.fenniak.net"
 
 import functools
 import logging
+import os
 import re
 import sys
 import warnings
@@ -45,6 +46,7 @@ from typing import (
     NoReturn,
     Optional,
     Union,
+    cast,
 )
 
 if sys.version_info[:2] >= (3, 10):
@@ -61,6 +63,7 @@ else:
 from .errors import (
     STREAM_TRUNCATED_PREMATURELY,
     DeprecationError,
+    LimitReachedError,
     PdfStreamError,
 )
 
@@ -157,29 +160,37 @@ WHITESPACES_AS_BYTES = b"".join(WHITESPACES)
 WHITESPACES_AS_REGEXP = b"[" + WHITESPACES_AS_BYTES + b"]"
 
 
-def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) -> bytes:
+def read_until_whitespace(stream: StreamType, max_bytes: Optional[int] = None, strict: bool = False) -> bytes:
     """
     Read non-whitespace characters and return them.
 
-    Stops upon encountering whitespace or when maxchars is reached.
+    Stops upon encountering whitespace or when max_bytes is reached.
 
     Args:
         stream: The data stream from which was read.
-        maxchars: The maximum number of bytes returned; by default unlimited.
+        max_bytes: The maximum number of bytes which are considered valid. One more byte
+            will always be read from the stream.
+        strict: Whether to raise an exception if the token exceeds max_bytes.
+            If False, a warning is logged and only the first max_bytes are returned.
 
     Returns:
         The data which was read.
 
     """
-    txt = b""
+    txt = bytearray()
     while True:
         tok = stream.read(1)
-        if tok.isspace() or not tok:
+        if tok.isspace() or tok in WHITESPACES or not tok:
+            break
+        if max_bytes is not None and len(txt) >= max_bytes:
+            if strict:
+                raise LimitReachedError(f"Token exceeds maximum length of {max_bytes} bytes.")
+            logger_warning(
+                "Token exceeds maximum length of %(max_bytes)d bytes.", source=__name__, max_bytes=max_bytes
+            )
             break
         txt += tok
-        if len(txt) == maxchars:
-            break
-    return txt
+    return bytes(txt)
 
 
 def read_non_whitespace(stream: BinaryStreamType) -> bytes:
@@ -233,6 +244,39 @@ def check_if_whitespace_only(value: bytes) -> bool:
     return all(b in WHITESPACES_AS_BYTES for b in value)
 
 
+NEUTRAL_CHARACTER_RANGES = (
+    ("\x00", "\x2F"),      # ASCII control codes, space, and early punctuation (!"#$%)
+    ("\x3A", "\x40"),      # ASCII operators and punctuation between digits & A (:;<=>?@)
+    ("\u0660", "\u066D"),  # Arabic-Indic digits and Arabic numeric separators
+    ("\u06F0", "\u06F9"),  # Extended Arabic-Indic (Persian) digits
+    ("\u2000", "\u206F"),  # General punctuation
+    ("\u20A0", "\u21FF"),  # Currency symbols, diacritical marks, letter-like symbols, number forms, arrows
+)
+
+
+def is_char_neutral(char: str, custom_special_characters: str = "") -> bool:
+    """Check if a character is part of neutral character ranges"""
+    if any(start <= char <= end for start, end in NEUTRAL_CHARACTER_RANGES):
+        return True
+
+    return bool(custom_special_characters and char in custom_special_characters)
+
+
+RTL_CHARACTER_RANGES = (
+    ("\u0590", "\u08FF"),  # Hebrew, Arabic, Syriac, Thaana, N'Ko, etc.
+    ("\uFB1D", "\uFDFF"),  # Hebrew & Arabic Presentation Forms-A
+    ("\uFE70", "\uFEFF"),  # Arabic Presentation Forms-B
+)
+
+
+def is_char_rtl(char: str, custom_rtl_min: str = "", custom_rtl_max: str = "") -> bool:
+    """Check if a character is part of RTL character ranges"""
+    if any(start <= char <= end for start, end in RTL_CHARACTER_RANGES):
+        return True
+
+    return bool(custom_rtl_min and custom_rtl_max and (custom_rtl_min <= char <= custom_rtl_max))
+
+
 def skip_over_comment(stream: StreamType) -> None:
     tok = stream.read(1)
     stream.seek(-1, 1)
@@ -243,41 +287,80 @@ def skip_over_comment(stream: StreamType) -> None:
                 raise PdfStreamError("File ended unexpectedly.")
 
 
-def read_until_regex(stream: StreamType, regex: Pattern[bytes]) -> bytes:
+def skip_over_comments(stream: StreamType, *, limit: Optional[int] = None) -> None:
+    """
+    Skip consecutive leading comments and the whitespace following each one.
+
+    The stream must be positioned at the first comment, if any. If the next
+    character is not ``%``, the stream position is unchanged. If only whitespace
+    follows the last comment before EOF, leave the stream at the last whitespace
+    byte, preserving the existing read_object behaviour for a missing object.
+
+    Args:
+        stream: The stream to read from.
+        limit: The maximum number of comments to skip, or ``None`` for no limit.
+
+    Raises:
+        LimitReachedError: If another comment follows after ``limit`` comments;
+            the stream remains at its ``%`` without reading its body.
+        PdfStreamError: If a comment ends before a line ending.
+
+    """
+    tok = stream.read(1)
+    stream.seek(-len(tok), 1)
+    comment_count = 0
+    while tok == b"%":
+        if limit is not None and comment_count >= limit:
+            raise LimitReachedError(f"Maximum number of leading comments reached: {limit}.")
+        skip_over_comment(stream)
+        tok = read_non_whitespace(stream)
+        stream.seek(-1, 1)
+        comment_count += 1
+
+
+def read_until_regex(*, stream: StreamType, regex: Pattern[bytes], length: int = sys.maxsize) -> bytes:
     """
     Read until the regular expression pattern matched (ignore the match).
     Treats EOF on the underlying stream as the end of the token to be matched.
 
     Args:
-        regex: re.Pattern
+        stream: The stream to read from.
+        regex: The pattern to search for.
+        length: The (approximated) maximum number of bytes to read before raising an exception.
 
     Returns:
         The read bytes.
 
     """
     parts: list[bytes] = []
-    total_len = 0
+    total_length = 0
     tail = b""
     chunk_size = 16
     while True:
-        tok = stream.read(chunk_size)
-        if not tok:
+        token = stream.read(chunk_size)
+        if not token:
             return b"".join(parts)
+        token_length = len(token)
+        if (current_length := total_length + token_length) >= length:
+            raise LimitReachedError(
+                f"Read stream length of {current_length} exceeds maximum allowed length of {length}."
+            )
+
         # Search overlap of previous tail + new chunk to catch
         # multi-byte regex matches spanning chunk boundaries.
-        buf = tail + tok
-        m = regex.search(buf)
-        if m is not None:
+        current_buffer = tail + token
+        search_match = regex.search(current_buffer)
+        parts.append(token)
+        if search_match is not None:
             overlap = len(tail)
-            actual_start = total_len - overlap + m.start()
-            stream.seek(actual_start - total_len - len(tok), 1)
-            parts.append(tok)
+            actual_start = total_length - overlap + search_match.start()
+            stream.seek(actual_start - total_length - token_length, 1)
             return b"".join(parts)[:actual_start]
-        parts.append(tok)
-        total_len += len(tok)
+        total_length += token_length
+
         # Fixed overlap: 16 bytes is sufficient for the short
         # delimiter patterns used in PDF parsing.
-        tail = tok[-16:]
+        tail = token[-16:]
         if chunk_size < 8192:
             chunk_size <<= 1
 
@@ -504,6 +587,30 @@ def _human_readable_bytes(bytes: int) -> str:
     return f"{bytes / 10**9:.1f} GB"
 
 
+def get_stream_size(stream: StreamType) -> int:
+    if hasattr(stream, "getbuffer"):
+        with stream.getbuffer() as view:
+            return cast(int, view.nbytes)
+
+    position = stream.tell()
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    stream.seek(position)
+    return size
+
+
+def get_stream_data(stream: StreamType) -> bytes:
+    if hasattr(stream, "getbuffer"):
+        with stream.getbuffer() as view:
+            return bytes(view)
+
+    position = stream.tell()
+    stream.seek(0, os.SEEK_SET)
+    data = stream.read(-1)
+    stream.seek(position)
+    return cast(bytes, data)
+
+
 # The following class has been copied from Django:
 # https://github.com/django/django/blob/adae619426b6f50046b3daaa744db52989c9d6db/django/utils/functional.py#L51-L65
 # It received some modifications to comply with our own coding standards.
@@ -598,8 +705,6 @@ class Version:
                 continue
             integer_prefix = match.group(1)
             suffix = match.group(2)
-            if integer_prefix is None:
-                integer_prefix = 0
             parsed_components.append((int(integer_prefix), suffix))
         return parsed_components
 
@@ -631,3 +736,10 @@ class Version:
                 return False
 
         return len(self.components) < len(other.components)
+
+
+@dataclass
+class _TraversalState:
+    """Sometimes we need mutable objects which just count something."""
+    entry_count: int = 0
+    has_logged: bool = False

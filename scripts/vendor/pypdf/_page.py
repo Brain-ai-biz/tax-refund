@@ -44,7 +44,7 @@ from typing import (
     overload,
 )
 
-from ._font import Font
+from ._configuration import get_configuration
 from ._protocols import PdfCommonDocProtocol
 from ._text_extraction import (
     _layout_mode,
@@ -54,10 +54,14 @@ from ._utils import (
     CompressedTransformationMatrix,
     TransformationMatrixType,
     _human_readable_bytes,
+    _TraversalState,
     deprecate,
+    deprecate_no_replacement,
+    deprecate_with_replacement,
     logger_warning,
     matrix_multiply,
 )
+from .actions import Action, PageTrigger
 from .constants import (
     _INLINE_IMAGE_KEY_MAPPING,
     _INLINE_IMAGE_VALUE_MAPPING,
@@ -82,6 +86,7 @@ from .generic import (
     StreamObject,
     is_null_or_none,
 )
+from .generic._font import Font
 
 try:
     from PIL.Image import Image
@@ -91,11 +96,42 @@ except ImportError:
     Image = object  # type: ignore[assignment,misc,unused-ignore]  # TODO: Remove unused-ignore on Python 3.10
     pil_not_imported = True  # error will be raised only when using images
 
-MERGE_CROP_BOX = "cropbox"  # pypdf <= 3.4.0 used "trimbox"
+MERGE_CROP_BOX = "cropbox"  # DEPRECATED: Use pypdf.Configuration.
+
+
+def _get_page_resources(obj: Any) -> DictionaryObject:
+    """Return the inherited /Resources, or an empty dictionary if malformed."""
+    resources = obj.get_inherited(key=PG.RESOURCES, default=DictionaryObject())
+    if is_null_or_none(resources):
+        return DictionaryObject()
+    if not isinstance(resources, DictionaryObject):
+        logger_warning(
+            "Page resources are not a dictionary: %(resources)s",
+            source=__name__,
+            resources=resources,
+        )
+        return DictionaryObject()
+    return resources
+
+
+def _get_font_resources(resources: Any) -> DictionaryObject:
+    """Return the /Font resources, or an empty dictionary if missing or malformed."""
+    fonts = resources.get(RES.FONT)
+    if is_null_or_none(fonts):
+        return DictionaryObject()
+    fonts = fonts.get_object()
+    if not isinstance(fonts, DictionaryObject):
+        logger_warning(
+            "Font resources are not a dictionary: %(fonts)s",
+            source=__name__,
+            fonts=fonts,
+        )
+        return DictionaryObject()
+    return fonts
 
 
 def _get_rectangle(self: Any, name: str, defaults: Iterable[str]) -> RectangleObject:
-    retval: Union[None, RectangleObject, ArrayObject, IndirectObject] = self.get(name)
+    retval: Optional[PdfObject] = self.get(name)
     if isinstance(retval, RectangleObject):
         return retval
     if is_null_or_none(retval):
@@ -104,22 +140,39 @@ def _get_rectangle(self: Any, name: str, defaults: Iterable[str]) -> RectangleOb
             if retval is not None:
                 break
     if isinstance(retval, IndirectObject):
-        retval = self.pdf.get_object(retval)
-    if isinstance(retval, ArrayObject) and (length := len(retval)) > 4:
-        logger_warning(
-            "Expected four values, got %(length)d: %(retval)s",
-            source=__name__,
-            length=length,
-            retval=retval,
-        )
-        retval = RectangleObject(tuple(retval[:4]))
+        # Pages of a writer have no `pdf`, the reference knows its own document.
+        retval = retval.get_object()
+    if not isinstance(retval, ArrayObject):
+        raise ValueError(f"Expected an array of four values for {name}, got {retval}")
+    if (length := len(retval)) != 4:
+        if length > 4:
+            # Keep backwards-compatibility with files previously written in a
+            # broken way by pypdf, which carried more than four values.
+            logger_warning(
+                "Expected four values, got %(length)d: %(retval)s",
+                source=__name__,
+                length=length,
+                retval=retval,
+            )
+            retval = RectangleObject(tuple(retval[:4]))
+        else:
+            raise ValueError(
+                f"Expected four values for {name}, got {length}: {retval}"
+            )
     else:
-        retval = RectangleObject(retval)  # type: ignore[arg-type]
+        retval = RectangleObject(retval)
     _set_rectangle(self, name, retval)
     return retval
 
 
 def _set_rectangle(self: Any, name: str, value: Union[RectangleObject, float]) -> None:
+    if isinstance(value, (list, tuple)) and len(value) < 4:
+        # The getter tolerates more than four values for backwards compatibility
+        # but cannot do anything with fewer, so writing them would produce a page
+        # whose box cannot be read back.
+        raise ValueError(
+            f"Expected four values for {name}, got {len(value)}: {value}"
+        )
     self[NameObject(name)] = value
 
 
@@ -342,6 +395,11 @@ class ImageFile:
     name: str = ""
     """
     Filename as identified within the PDF file.
+
+    .. warning::
+
+        This value can contain arbitrary characters. Please make sure to sanitize it before
+        using it to write the file content to the disk for example.
     """
 
     data: bytes = b""
@@ -357,6 +415,16 @@ class ImageFile:
     indirect_reference: Optional[IndirectObject] = None
     """
     Reference to the object storing the stream.
+    """
+
+    is_inline: bool = False
+    """
+    True if this is an inline image (~0~, ~1~, etc.).
+    """
+
+    is_displayed: bool = False
+    """
+    True if this image is displayed in the page content stream.
     """
 
     def replace(self, new_image: Image, **kwargs: Any) -> None:
@@ -512,7 +580,7 @@ class PageObject(DictionaryObject):
     ) -> None:
         DictionaryObject.__init__(self)
         self.pdf = pdf
-        self.inline_images: Optional[dict[str, ImageFile]] = None
+        self._content_stream_images: Optional[dict[str, Optional[ImageFile]]] = None
         self.indirect_reference = indirect_reference
         if not is_null_or_none(indirect_reference):
             assert indirect_reference is not None, "mypy"
@@ -590,7 +658,7 @@ class PageObject(DictionaryObject):
             else:
                 raise PageSizeNotDefinedError
         page.__setitem__(
-            NameObject(PG.MEDIABOX), RectangleObject((0, 0, width, height))  # type: ignore[arg-type]
+            NameObject(PG.MEDIABOX), RectangleObject((0, 0, width, height))
         )
 
         return page
@@ -607,8 +675,8 @@ class PageObject(DictionaryObject):
         if _i in call_stack:
             return []
         call_stack.append(_i)
-        if self.inline_images is None:
-            self.inline_images = self._get_inline_images()
+        if self._content_stream_images is None:
+            self._content_stream_images = self._parse_images_from_content_stream()
         if obj is None:
             obj = self
         if ancest is None:
@@ -616,66 +684,105 @@ class PageObject(DictionaryObject):
         lst: list[Union[str, list[str]]] = []
         if (
                 PG.RESOURCES not in obj or
-                is_null_or_none(resources := obj[PG.RESOURCES]) or
-                RES.XOBJECT not in cast(DictionaryObject, resources)
+                is_null_or_none(resources := cast(DictionaryObject, obj[PG.RESOURCES])) or
+                RES.XOBJECT not in resources
         ):
-            return [] if self.inline_images is None else list(self.inline_images.keys())
+            # Forms without XObject resources have no images inside them
+            if len(ancest) > 0:
+                return []
+            # for inline images, cache dict entries are not None
+            return [image_name for image_name, image_value in self._content_stream_images.items() if image_value]
 
-        x_object = resources[RES.XOBJECT].get_object()  # type: ignore[index]
+        x_object = resources[RES.XOBJECT].get_object()
+        if not isinstance(x_object, DictionaryObject):
+            logger_warning(
+                "XObject resources are not a dictionary: %(x_object)s",
+                source=__name__,
+                x_object=x_object,
+            )
+            return []
+
+        # Iterate through all XObject resources
         for o in x_object:
-            if not isinstance(x_object[o], StreamObject):
+            entry = x_object[o]
+            # Skip non-stream objects (only process StreamObject)
+            if not isinstance(entry, StreamObject):
                 continue
-            if x_object[o][ImageAttributes.SUBTYPE] == "/Image":
+            if entry.get(ImageAttributes.SUBTYPE, "") == "/Image":
+                # If it's an image, add it to lst for further processing
                 lst.append(o if len(ancest) == 0 else [*ancest, o])
-            else:  # is a form with possible images inside
-                lst.extend(self._get_ids_image(x_object[o], [*ancest, o], call_stack))
-        assert self.inline_images is not None
-        lst.extend(list(self.inline_images.keys()))
-        return lst
+            else:
+                # If it's a form, recursively search for images inside it
+                # Forms may contain images that are Do-referenced in their content stream
+                lst.extend(self._get_ids_image(entry, [*ancest, o], call_stack))
+
+        # Removes duplicates and preserves order
+        deduplicated = lst.copy()
+
+        # Add inline images from _content_stream_images
+        for object_name, object_value in self._content_stream_images.items():
+            # inline images have cache populated
+            if object_name not in deduplicated and object_value:
+                deduplicated.append(object_name)
+
+        return deduplicated
 
     def _get_image(
         self,
-        id: Union[str, list[str], tuple[str]],
+        image_id: Union[str, list[str], tuple[str]],
         obj: Optional[DictionaryObject] = None,
     ) -> ImageFile:
         if obj is None:
             obj = cast(DictionaryObject, self)
-        if isinstance(id, tuple):
-            id = list(id)
-        if isinstance(id, list) and len(id) == 1:
-            id = id[0]
+        if isinstance(image_id, tuple):
+            image_id = list(image_id)
+        if isinstance(image_id, list) and len(image_id) == 1:
+            image_id = image_id[0]
         xobjs: Optional[DictionaryObject] = None
         try:
             xobjs = cast(
                 DictionaryObject, cast(DictionaryObject, obj[PG.RESOURCES])[RES.XOBJECT]
             )
         except KeyError as exc:
-            if not (id[0] == "~" and id[-1] == "~"):
+            if not (image_id[0] == "~" and image_id[-1] == "~"):
                 raise KeyError(
-                    f"Cannot access image object {id} without XObject resources"
+                    f"Cannot access image object {image_id} without XObject resources"
                 ) from exc
-        if isinstance(id, str):
-            if id[0] == "~" and id[-1] == "~":
-                if self.inline_images is None:
-                    self.inline_images = self._get_inline_images()
-                if self.inline_images is None:
-                    raise KeyError("No inline image can be found")
-                return self.inline_images[id]
+        if isinstance(image_id, str):
+            if image_id[0] == "~" and image_id[-1] == "~":
+                if self._content_stream_images is None:
+                    self._content_stream_images = self._parse_images_from_content_stream()
+                if image_id not in self._content_stream_images:
+                    raise KeyError(f"Image {image_id} not found")
+                image_file = self._content_stream_images[image_id]
+                assert image_file is not None
+                return image_file
 
+            # Do-referenced image name (non-inline string keys like /Im0)
             assert xobjs is not None
+            if image_id not in xobjs:
+                raise KeyError(f"Image {image_id} not found")
+            xobj = cast(DictionaryObject, xobjs[image_id])
+            if xobj.get(ImageAttributes.SUBTYPE, "") != "/Image":
+                raise KeyError(f"XObject {image_id} is not an image")
+
+            # Check if displayed (in content stream)
+            is_displayed = self._content_stream_images is not None and image_id in self._content_stream_images
+
             from .generic._image_xobject import _xobj_to_image  # noqa: PLC0415
-            imgd = _xobj_to_image(cast(DictionaryObject, xobjs[id]))
-            extension, byte_stream = imgd[:2]
+            extension, byte_stream, img = _xobj_to_image(xobj)
             return ImageFile(
-                name=f"{id[1:]}{extension}",
+                name=f"{image_id[1:]}{extension}",
                 data=byte_stream,
-                image=imgd[2],
-                indirect_reference=xobjs[id].indirect_reference,
+                image=img,
+                indirect_reference=xobj.indirect_reference,
+                is_inline=False,
+                is_displayed=is_displayed,
             )
         # in a subobject
         assert xobjs is not None
-        ids = id[1:]
-        return self._get_image(ids, cast(DictionaryObject, xobjs[id[0]]))
+        ids = image_id[1:]
+        return self._get_image(ids, cast(DictionaryObject, xobjs[image_id[0]]))
 
     @property
     def images(self) -> VirtualListImages:
@@ -693,63 +800,115 @@ class PageObject(DictionaryObject):
             * `reader.pages[0].images['/TP1','/Image1']` # return image '/Image1' within '/TP1' XObject form
             * `for img in reader.pages[0].images:` # loops through all objects
 
-        images.keys() and images.items() can be used.
-
-        The ImageFile has the following properties:
-
-            * `.name` : name of the object
-            * `.data` : bytes of the object
-            * `.image` : PIL Image Object
-            * `.indirect_reference` : object reference
-
-        and the following methods:
-            `.replace(new_image: PIL.Image.Image, **kwargs)` :
-                replace the image in the pdf with the new image
-                applying the saving parameters indicated (such as quality)
-
         Example usage:
 
-            reader.pages[0].images[0].replace(Image.open("new_image.jpg"), quality=20)
-
-        Inline images are extracted and named ~0~, ~1~, ..., with the
-        indirect_reference set to None.
+            >>> from pypdf import PdfWriter
+            >>> writer = PdfWriter()
+            >>> page = writer.add_blank_page(800, 600)
+            >>> images = page.images
 
         """
         return VirtualListImages(self._get_ids_image, self._get_image)
+
+    @property
+    def inline_images(self) -> Optional[dict[str, ImageFile]]:
+        """
+        Return only inline images from the page.
+
+        .. deprecated::
+            Use :attr:`images` and filter by :attr:`ImageFile.is_inline` instead.
+            This property will be removed in pypdf 7.0.
+
+        Examples:
+            >>> from pypdf import PdfWriter
+            >>> writer = PdfWriter()
+            >>> page = writer.add_blank_page(800,600)
+            >>> for image_name, image_file in page.images.items():
+            ...     if image_file.is_inline:
+            ...         print(f"{image_name} is inline")
+        """
+        deprecate_with_replacement(
+            "PageObject.inline_images",
+            "PageObject.images",
+            "7.0.0",
+        )
+        if self._content_stream_images is None:
+            return None
+        return {
+            image_name: image_file
+            for image_name, image_file in self._content_stream_images.items()
+            if image_file and image_file.is_inline  # for inline images, image_file is populated
+        }
+
+    @inline_images.setter
+    def inline_images(self, value: Optional[dict[str, ImageFile]]) -> None:
+        deprecate_no_replacement(
+            "PageObject.inline_images",
+            "7.0.0",
+        )
+        if value is None:
+            self._content_stream_images = None
+        else:
+            assert self._content_stream_images is not None, "Can't edit inline_images before accessing images"
+            self._content_stream_images.update(value)
 
     def _translate_value_inline_image(self, k: str, v: PdfObject) -> PdfObject:
         """Translate values used in inline image"""
         try:
             v = NameObject(_INLINE_IMAGE_VALUE_MAPPING[cast(str, v)])
-        except (TypeError, KeyError):
+        except (TypeError, KeyError) as exception:
             if isinstance(v, NameObject):
                 # It is a custom name, thus we have to look in resources.
                 # The only applicable case is for ColorSpace.
-                try:
-                    res = cast(DictionaryObject, self["/Resources"])["/ColorSpace"]
-                    v = cast(DictionaryObject, res)[v]
-                except KeyError:  # for res and v
-                    raise PdfReadError(f"Cannot find resource entry {v} for {k}")
+                if "/Resources" in self:
+                    resources = cast(DictionaryObject, self["/Resources"])
+                    if "/ColorSpace" in resources and v in cast(DictionaryObject, resources["/ColorSpace"]):
+                        color_space = cast(DictionaryObject, resources["/ColorSpace"])
+                        return color_space[v]
+                raise PdfReadError(f"Cannot find resource entry {v} for {k}") from exception
         return v
 
-    def _get_inline_images(self) -> dict[str, ImageFile]:
-        """Load inline images. Entries will be identified as `~1~`."""
+    def _parse_images_from_content_stream(self) -> dict[str, Optional[ImageFile]]:
+        """Load images from content stream. Includes both inline images and Do-referenced images.
+
+        This method scans the page content stream and extracts:
+
+        1. **Inline images** (~0~, ~1~...): Embedded directly in content stream via BI/EI operators
+           - is_inline=True, is_displayed=True, indirect_reference=None
+
+        2. **Do-referenced objects** (/Im0, /Im1..., /Form1...): Referenced via "Do" operator
+           - is_inline=False, is_displayed=True, indirect_reference=<image object>
+
+        3. **Pure XObject images** (/I0, /Image1...): Defined in Resources only (not in content stream)
+           - is_inline=False, is_displayed=False, indirect_reference=<image object>
+
+        Returns:
+            Dictionary mapping names to ImageFile instances (inline) or None (Do-referenced).
+        """
         content = self.get_contents()
         if is_null_or_none(content):
             return {}
         imgs_data = []
+        do_image_names: list[bytes] = []
         assert content is not None, "mypy"
         for param, ope in content.operations:
             if ope == b"INLINE IMAGE":
                 imgs_data.append(
                     {"settings": param["settings"], "__streamdata__": param["data"]}
                 )
+            elif ope == b"Do" and param:
+                do_image_names.append(param[0])  # First operand is the XObject name
             elif ope in (b"BI", b"EI", b"ID"):  # pragma: no cover
                 raise PdfReadError(
                     f"{ope!r} operator met whereas not expected, "
                     "please share use case with pypdf dev team"
                 )
-        files = {}
+
+        files: dict[str, Optional[ImageFile]] = {}
+        # Process Do-referenced objects first (images + forms, no subtype check)
+        files = dict.fromkeys(list(map(str, do_image_names)), None)
+
+        # Then process inline images
         for num, ii in enumerate(imgs_data):
             init = {
                 "__streamdata__": ii["__streamdata__"],
@@ -764,7 +923,15 @@ class PageObject(DictionaryObject):
                     )
                 else:
                     v = self._translate_value_inline_image(k, v)
-                k = NameObject(_INLINE_IMAGE_KEY_MAPPING[k])
+                if k in _INLINE_IMAGE_KEY_MAPPING:
+                    k = NameObject(_INLINE_IMAGE_KEY_MAPPING[k])
+                else:
+                    logger_warning(
+                        "Unknown inline image key %(key)s, keeping it as-is.",
+                        source=__name__,
+                        key=k,
+                    )
+                    k = NameObject(k)
                 if k not in init:
                     init[k] = v
             ii["object"] = EncodedStreamObject.initialize_from_dictionary(init)
@@ -775,7 +942,10 @@ class PageObject(DictionaryObject):
                 data=byte_stream,
                 image=img,
                 indirect_reference=None,
+                is_inline=True,
+                is_displayed=True,
             )
+
         return files
 
     @property
@@ -1001,7 +1171,7 @@ class PageObject(DictionaryObject):
         return None
 
     def replace_contents(
-        self, content: Union[None, ContentStream, EncodedStreamObject, ArrayObject]
+        self, content: Union[ContentStream, EncodedStreamObject, ArrayObject, None]
     ) -> None:
         """
         Replace the page contents with the new content and nullify old objects
@@ -1022,11 +1192,19 @@ class PageObject(DictionaryObject):
             )
 
         writer = self.indirect_reference.pdf
-        if isinstance(self.get(PG.CONTENTS, None), ArrayObject):
-            content_array = cast(ArrayObject, self[PG.CONTENTS])
-            for reference in content_array:
+        # Resolve /Contents because it may be an indirect reference to an
+        # ArrayObject. Without resolving it, an indirect contents array is not
+        # recognized and its stream objects are left in the writer's object list.
+        old_contents = self.get(PG.CONTENTS, None)
+        if old_contents is not None:
+            old_contents = old_contents.get_object()
+        if isinstance(old_contents, ArrayObject):
+            for reference in old_contents:
+                if not isinstance(reference, IndirectObject):
+                    # Direct objects are not part of the writer's object list.
+                    continue
                 try:
-                    writer._replace_object(indirect_reference=reference.indirect_reference, obj=NullObject())
+                    writer._replace_object(indirect_reference=reference, obj=NullObject())
                 except ValueError:
                     # Occurs when called on PdfReader.
                     pass
@@ -1060,8 +1238,8 @@ class PageObject(DictionaryObject):
                 # as a backup solution, we put content as an object although not in accordance with pdf ref
                 # this will be fixed with the _add_object
                 self[NameObject(PG.CONTENTS)] = content
-        # forces recalculation of inline_images
-        self.inline_images = None
+        # forces recalculation of images
+        self._content_stream_images = None
 
     def merge_page(
         self, page2: "PageObject", expand: bool = False, over: bool = True
@@ -1153,7 +1331,8 @@ class PageObject(DictionaryObject):
 
         page2_content = page2.get_contents()
         if page2_content is not None:
-            rect = getattr(page2, MERGE_CROP_BOX)
+            configuration = get_configuration()
+            rect = getattr(page2, configuration.page_merge_box)
             page2_content.operations.insert(
                 0,
                 (
@@ -1271,11 +1450,18 @@ class PageObject(DictionaryObject):
                 if "/QuadPoints" in a:
                     q = cast(ArrayObject, a["/QuadPoints"])
                     aa[NameObject("/QuadPoints")] = ArrayObject(
-                        trsf.apply_on((q[0], q[1]), True)
-                        + trsf.apply_on((q[2], q[3]), True)
-                        + trsf.apply_on((q[4], q[5]), True)
-                        + trsf.apply_on((q[6], q[7]), True)
+                        value
+                        for i in range(0, len(q), 2)
+                        for value in trsf.apply_on((q[i], q[i + 1]), True)
                     )
+                # The /Rect update above only repositions and resizes the
+                # annotation's bounding box; it does not touch the
+                # appearance stream's own coordinate system. See
+                # transform_annotation_appearance for why that matters.
+                from pypdf.generic._appearance_stream import (  # noqa: PLC0415
+                    transform_annotation_appearance,
+                )
+                transform_annotation_appearance(aa, trsf)
                 try:
                     aa["/Popup"][NameObject("/Parent")] = aa.indirect_reference
                 except KeyError:
@@ -1294,7 +1480,8 @@ class PageObject(DictionaryObject):
 
         page2content = page2.get_contents()
         if page2content is not None:
-            rect = getattr(page2, MERGE_CROP_BOX)
+            configuration = get_configuration()
+            rect = getattr(page2, configuration.page_merge_box)
             page2content.operations.insert(
                 0,
                 (
@@ -1612,13 +1799,13 @@ class PageObject(DictionaryObject):
                 content.indirect_reference.pdf._objects[  # type: ignore[union-attr]
                     content.indirect_reference.idnum - 1  # type: ignore[union-attr]
                 ] = content_obj
-            except AttributeError:
+            except AttributeError as exception:
                 if self.indirect_reference is not None and hasattr(
                     self.indirect_reference.pdf, "_add_object"
                 ):
                     self.replace_contents(content_obj)
                 else:
-                    raise ValueError("Page must be part of a PdfWriter")
+                    raise ValueError("Page must be part of a PdfWriter") from exception
 
     @property
     def page_number(self) -> Optional[int]:
@@ -1631,11 +1818,13 @@ class PageObject(DictionaryObject):
         """
         if self.indirect_reference is None:
             return None
-        try:
-            lst = self.indirect_reference.pdf.pages
-            return int(lst.index(self))
-        except ValueError:
-            return None
+        # Compare the indirect references, not the pages themselves: two pages
+        # with identical contents compare equal, so `list.index` would return
+        # the position of the first match for all of them.
+        for number, page in enumerate(self.indirect_reference.pdf.pages):
+            if page.indirect_reference == self.indirect_reference:
+                return number
+        return None
 
     def _debug_for_extract(self) -> str:  # pragma: no cover
         out = ""
@@ -1657,6 +1846,8 @@ class PageObject(DictionaryObject):
                         "/Encoding"
                     ].__repr__()
                     out += enc_repr + "\n"
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     pass
                 try:
@@ -1668,6 +1859,8 @@ class PageObject(DictionaryObject):
                         .decode()
                         + "\n"
                     )
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     pass
 
@@ -1687,6 +1880,7 @@ class PageObject(DictionaryObject):
         visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
         *,
         known_ids: Optional[set[int]] = None,
+        traversal_state: Optional[_TraversalState] = None
     ) -> str:
         """
         See extract_text for most arguments.
@@ -1699,24 +1893,20 @@ class PageObject(DictionaryObject):
         """
         if known_ids is None:
             known_ids = set()
+        if traversal_state is None:
+            traversal_state = _TraversalState()
 
         extractor = TextExtraction()
         font_resources: dict[str, DictionaryObject] = {}
         fonts: dict[str, Font] = {}
 
-        resources_dict = cast(
-            Optional[DictionaryObject],
-            obj.get_inherited(key=PG.RESOURCES, default=DictionaryObject())
-        )
-        if is_null_or_none(resources_dict) or not resources_dict:
+        resources_dict = _get_page_resources(obj)
+        if not resources_dict:
             # No resources means no text is possible (no font); we consider the
             # file as not damaged, no need to check for TJ or Tj
             return ""
 
-        if (
-            "/Font" in resources_dict
-            and (font_resources_dict := cast(DictionaryObject, resources_dict["/Font"]))
-        ):
+        if font_resources_dict := _get_font_resources(resources_dict):
             for font_resource in font_resources_dict:
                 try:
                     font_resource_object = cast(DictionaryObject, font_resources_dict[font_resource].get_object())
@@ -1750,7 +1940,7 @@ class PageObject(DictionaryObject):
             if operator == b"'":
                 extractor.process_operation(b"T*", [])
                 extractor.process_operation(b"Tj", operands)
-            elif operator == b'"':
+            elif operator == b'"' and len(operands) >= 3:
                 extractor.process_operation(b"Tw", [operands[0]])
                 extractor.process_operation(b"Tc", [operands[1]])
                 extractor.process_operation(b"T*", [])
@@ -1758,9 +1948,10 @@ class PageObject(DictionaryObject):
             elif operator == b"TJ":
                 # The space width may be smaller than the font width, so the width should be 95%.
                 _confirm_space_width = extractor._space_width * 0.95
-                if operands:
+                if operands and isinstance(operands[0], ArrayObject):
                     for op in operands[0]:
-                        if isinstance(op, (str, bytes)):
+                        # A name is a str too, but not text to show
+                        if isinstance(op, (str, bytes)) and not isinstance(op, NameObject):
                             extractor.process_operation(b"Tj", [op])
                         if isinstance(op, (int, float, NumberObject, FloatObject)) and (
                             abs(float(op)) >= _confirm_space_width
@@ -1768,10 +1959,12 @@ class PageObject(DictionaryObject):
                             and extractor.text[-1] != " "
                         ):
                             extractor.process_operation(b"Tj", [" "])
-            elif operator == b"TD":
-                extractor.process_operation(b"TL", [-operands[1]])
+            elif operator == b"TD" and len(operands) >= 2:
+                # a non-numeric ty leaves the leading unchanged, like a non-numeric TL
+                if isinstance(operands[1], (int, float)):
+                    extractor.process_operation(b"TL", [-operands[1]])
                 extractor.process_operation(b"Td", operands)
-            elif operator == b"Do":
+            elif operator == b"Do" and operands:
                 extractor.output += extractor.text
                 if visitor_text is not None:
                     visitor_text(
@@ -1795,40 +1988,25 @@ class PageObject(DictionaryObject):
                 except IndexError:
                     pass
                 try:
-                    xobj = cast(DictionaryObject, resources_dict["/XObject"])
-                    xform = cast(EncodedStreamObject, xobj[operands[0]])
-                    if xform["/Subtype"] != NameObject("/Image"):
-                        xform_id = id(xform)
-                        if xform_id in known_ids:
-                            logger_warning(
-                                "Detected cyclic form XObject reference, skipping %(operand)s.",
-                                source=__name__,
-                                operand=operands[0]
-                            )
-                            text = ""
-                        else:
-                            known_ids.add(xform_id)
-                            try:
-                                text = self.extract_xform_text(
-                                    xform,
-                                    orientations,
-                                    space_width,
-                                    visitor_operand_before,
-                                    visitor_operand_after,
-                                    visitor_text,
-                                    known_ids=known_ids,
-                                )
-                            finally:
-                                known_ids.discard(xform_id)
+                    xform_text = self._extract_text__xform(
+                        resources_dict=resources_dict,
+                        operands=operands,
+                        orientations=orientations,
+                        space_width=space_width,
+                        visitor_operand_before=visitor_operand_before,
+                        visitor_operand_after=visitor_operand_after,
+                        visitor_text=visitor_text,
+                        known_ids=known_ids,
+                        traversal_state=traversal_state
+                    )
+                    if xform_text is not None:
+                        text = xform_text
                         extractor.output += text
-                        if visitor_text is not None:
-                            visitor_text(
-                                text,
-                                extractor.memo_cm,
-                                extractor.memo_tm,
-                                extractor.font_resource,
-                                extractor.font_size,
-                            )
+                        # Nothing else to do: each text piece inside the form has
+                        # already been reported via visitor_text while the form was
+                        # being extracted recursively (issue #4079).
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception as exception:
                     logger_warning(
                         "Impossible to decode XFormObject %(operand)s: %(exception)s",
@@ -1855,6 +2033,64 @@ class PageObject(DictionaryObject):
             )
         return extractor.output
 
+    def _extract_text__xform(
+        self,
+        *,
+        resources_dict: DictionaryObject,
+        operands: Any,
+        orientations: tuple[int, ...] = (0, 90, 180, 270),
+        space_width: float = 200.0,
+        visitor_operand_before: Optional[Callable[[Any, Any, Any, Any], None]] = None,
+        visitor_operand_after: Optional[Callable[[Any, Any, Any, Any], None]] = None,
+        visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
+        known_ids: set[int],
+        traversal_state: _TraversalState
+    ) -> Optional[str]:
+        xobj = cast(DictionaryObject, resources_dict["/XObject"])
+        xform = cast(EncodedStreamObject, xobj[operands[0]])
+        if xform["/Subtype"] == NameObject("/Image"):
+            return None
+
+        xform_id = id(xform)
+        if xform_id in known_ids:
+            logger_warning(
+                "Detected cyclic form XObject reference, skipping %(operand)s.",
+                source=__name__,
+                operand=operands[0]
+            )
+            return ""
+
+        configuration = get_configuration()
+        if traversal_state.entry_count >= configuration.xform_maximum_invocations_per_extraction:
+            if not traversal_state.has_logged:
+                traversal_state.has_logged = True
+                logger_warning(
+                    (
+                        "Exceeded %(limit)d form XObject invocations while extracting text; "
+                        "further form content is skipped."
+                    ),
+                    source=__name__,
+                    limit=configuration.xform_maximum_invocations_per_extraction
+                )
+            return ""
+
+        traversal_state.entry_count += 1
+        known_ids.add(xform_id)
+        try:
+            text = self.extract_xform_text(
+                xform,
+                orientations,
+                space_width,
+                visitor_operand_before,
+                visitor_operand_after,
+                visitor_text,
+                known_ids=known_ids,
+                traversal_state=traversal_state,
+            )
+        finally:
+            known_ids.discard(xform_id)
+        return text
+
     def _layout_mode_fonts(self) -> dict[str, Font]:
         """
         Get fonts formatted for "layout" mode text extraction.
@@ -1874,14 +2110,24 @@ class PageObject(DictionaryObject):
                 break
             visited.add(obj_id)
 
-            resources_dict: Any = obj.get(PG.RESOURCES, {})
-            if "/Font" in resources_dict and self.pdf is not None:
-                for font_name in resources_dict["/Font"]:
-                    fonts[font_name] = Font.from_font_resource(resources_dict["/Font"][font_name])
+            resources_dict: Any = obj.get(PG.RESOURCES, DictionaryObject()).get_object()
+            if not isinstance(resources_dict, DictionaryObject):
+                logger_warning(
+                    "Page resources are not a dictionary: %(resources)s",
+                    source=__name__,
+                    resources=resources_dict,
+                )
+                resources_dict = DictionaryObject()
+            if self.pdf is not None and (font_resources := _get_font_resources(resources_dict)):
+                for font_name in font_resources:
+                    font_object = font_resources[font_name].get_object()
+                    if isinstance(font_object, DictionaryObject):
+                        fonts[font_name] = Font.from_font_resource(font_object)
 
-            if "/Parent" not in obj:
+            parent = obj.get("/Parent", NullObject()).get_object()
+            if not isinstance(parent, DictionaryObject):
                 break
-            obj = obj["/Parent"].get_object()
+            obj = parent
 
         return fonts
 
@@ -1928,9 +2174,14 @@ class PageObject(DictionaryObject):
                 "utf-8"
             )
 
-        ops = iter(
-            ContentStream(self["/Contents"].get_object(), self.pdf, "bytes").operations
-        )
+        contents = self.get("/Contents")
+        if contents is not None:
+            contents = contents.get_object()
+        if not isinstance(contents, (ArrayObject, StreamObject)):
+            # No content can be extracted (certainly an empty page).
+            return ""
+
+        ops = iter(ContentStream(contents, self.pdf, "bytes").operations)
         bt_groups = _layout_mode.text_show_operations(
             ops, fonts, strip_rotated, debug_path
         )
@@ -2091,6 +2342,7 @@ class PageObject(DictionaryObject):
         visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
         *,
         known_ids: Optional[set[int]] = None,
+        traversal_state: Optional[Any] = None
     ) -> str:
         """
         Extract text from an XObject.
@@ -2102,11 +2354,15 @@ class PageObject(DictionaryObject):
             visitor_operand_before:
             visitor_operand_after:
             visitor_text:
+            known_ids:
+            traversal_state:
 
         Returns:
             The extracted text
 
         """
+        # The type hint would have to use an internal type otherwise, which is not desired.
+        assert traversal_state is None or isinstance(traversal_state, _TraversalState)
         return self._extract_text(
             xform,
             self.pdf,
@@ -2117,6 +2373,7 @@ class PageObject(DictionaryObject):
             visitor_operand_after,
             visitor_text,
             known_ids=known_ids,
+            traversal_state=traversal_state,
         )
 
     def _get_fonts(self) -> tuple[set[str], set[str]]:
@@ -2171,7 +2428,15 @@ class PageObject(DictionaryObject):
     def annotations(self) -> Optional[ArrayObject]:
         if "/Annots" not in self:
             return None
-        return cast(ArrayObject, self["/Annots"])
+        annotations = self["/Annots"].get_object()
+        if not isinstance(annotations, ArrayObject):
+            logger_warning(
+                "Annotations are not an array: %(annotations)s",
+                source=__name__,
+                annotations=annotations,
+            )
+            return None
+        return annotations
 
     @annotations.setter
     def annotations(self, value: Optional[ArrayObject]) -> None:
@@ -2188,6 +2453,47 @@ class PageObject(DictionaryObject):
             del self[NameObject("/Annots")]
         else:
             self[NameObject("/Annots")] = value
+
+    def add_action(self, trigger: PageTrigger, action: Action) -> None:
+        """
+        Add an action which will launch on the given trigger event of this page.
+
+        Args:
+            trigger: The action trigger to use.
+            action: The action to be done.
+
+        Example:
+            >>> from pypdf import PdfWriter
+            >>> from pypdf.actions import JavaScript, PageTrigger
+            >>> writer = PdfWriter()
+            >>> page = writer.add_blank_page(595, 842)
+            >>> # Display the page number when the page is opened
+            >>> page.add_action(PageTrigger("open"), JavaScript("app.alert('This is page ' + this.pageNum);"))
+            >>> # Display the page number when the page is closed
+            >>> page.add_action(PageTrigger("close"), JavaScript("app.alert('This is page ' + this.pageNum);"))
+        """
+        return Action._create_new(self, trigger, action)
+
+    def delete_action(self, trigger: PageTrigger) -> None:
+        """
+        Delete all actions associated with an open or close trigger event of this page.
+
+        Args:
+            trigger: An open or close trigger.
+
+        Example:
+            >>> from pypdf import PdfWriter
+            >>> from pypdf.actions import JavaScript, PageTrigger
+            >>> writer = PdfWriter()
+            >>> page = writer.add_blank_page(595, 842)
+            >>> page.add_action(PageTrigger("open"), JavaScript("app.alert('This is page ' + this.pageNum);"))
+            >>> page.add_action(PageTrigger("close"), JavaScript("app.alert('This is page ' + this.pageNum);"))
+            >>> # Delete all actions triggered by a page open
+            >>> page.delete_action(PageTrigger("open"))
+            >>> # Delete all actions triggered by a page close
+            >>> page.delete_action(PageTrigger("close"))
+        """
+        return Action._delete(self, trigger)
 
 
 class _VirtualList(Sequence[PageObject]):
@@ -2260,6 +2566,8 @@ class _VirtualList(Sequence[PageObject]):
                 try:
                     assert ind is not None
                     del ind.pdf.flattened_pages[index]  # case of page in a Reader
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:  # pragma: no cover
                     pass
                 if "/Count" in parent:
@@ -2270,9 +2578,9 @@ class _VirtualList(Sequence[PageObject]):
                     # No more objects in this part of this subtree
                     ind = parent.indirect_reference
                 parent = parent.get("/Parent", None)
-            except ValueError:  # from index
+            except ValueError as exception:  # from index
                 if first:
-                    raise PdfReadError(f"Page not found in page tree: {ind}")
+                    raise PdfReadError(f"Page not found in page tree: {ind}") from exception
                 break
 
     def __iter__(self) -> Iterator[PageObject]:
@@ -2310,7 +2618,7 @@ def _get_fonts_walk(
     """
     fontkeys = ("/FontFile", "/FontFile2", "/FontFile3")
 
-    def process_font(f: DictionaryObject) -> None:
+    def process_font(f: PdfObject) -> None:
         nonlocal fnt, emb
         f = cast(DictionaryObject, f.get_object())  # to be sure
         if "/BaseFont" in f:
@@ -2351,7 +2659,9 @@ def _get_fonts_walk(
                 emb.add("(" + cast(str, f["/Subtype"]) + ")")
 
     if "/DR" in obj and "/Font" in cast(DictionaryObject, obj["/DR"]):
-        for f in cast(DictionaryObject, cast(DictionaryObject, obj["/DR"])["/Font"]):
+        for f in cast(
+            DictionaryObject, cast(DictionaryObject, obj["/DR"])["/Font"]
+        ).values():
             process_font(f)
     if "/Resources" in obj:
         if "/Font" in cast(DictionaryObject, obj["/Resources"]):
