@@ -133,7 +133,8 @@ def cmd_extract(a):
     files = []
     for f in a.files:
         p = Path(f).expanduser()
-        files += sorted(p.glob("*.pdf")) + sorted(p.glob("*.PDF")) if p.is_dir() else [p]
+        # בווינדוס glob לא מבחין בין pdf ל-PDF, אז כל קובץ נספר פעמיים
+        files += sorted(q for q in p.iterdir() if q.is_file() and q.suffix.lower() == ".pdf") if p.is_dir() else [p]
     cands, manual = [], []
     for i, p in enumerate(files, 1):
         name = redact(p.name)[0]          # מערכות שכר שמות לפעמים את ת"ז בשם הקובץ
